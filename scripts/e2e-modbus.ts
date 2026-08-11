@@ -69,7 +69,7 @@ try {
   simulator = await startSimulator();
   console.log(`[e2e] modbus simulator on 127.0.0.1:${MODBUS_PORT}`);
 
-  server = await startOdiServer({ port: API_PORT, dataDir });
+  server = await startOdiServer({ port: API_PORT, dataDir, opcua: { enabled: false } });
   console.log(`[e2e] ODIServer on :${API_PORT}`);
 
   // Configure channel -> device -> tags via REST

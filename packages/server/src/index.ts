@@ -7,6 +7,7 @@ import { ConfigStore, TagEngine } from "@odiserver/core";
 import { attachTagWebSocket, createApiApp } from "@odiserver/api";
 import { ensureDataDirs, resolveDataDir } from "./datadir.js";
 import { deployDriverFlows, startEmbeddedNodeRed, stopEmbeddedNodeRed } from "./nodered.js";
+import { startOpcUaServer, type OpcUaServerHandle } from "./opcua-server.js";
 
 export interface OdiServerHandle {
   httpServer: HttpServer;
@@ -14,6 +15,7 @@ export interface OdiServerHandle {
   engine: TagEngine;
   port: number;
   dataDir: string;
+  opcua: OpcUaServerHandle | undefined;
   stop(): Promise<void>;
 }
 
@@ -21,6 +23,8 @@ export interface OdiServerOptions {
   port?: number;
   dataDir?: string;
   logger?: Logger;
+  /** Northbound OPC UA server; enabled on port 49320 by default. */
+  opcua?: { enabled?: boolean; port?: number };
 }
 
 function defaultWebDistDir(): string | undefined {
@@ -69,14 +73,35 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
   await deployDriverFlows(store);
   logger.info("driver flows deployed");
 
+  // Northbound OPC UA server (browse tree). A bind failure
+  // (e.g. port already in use) must not take the HTTP API down with it.
+  let opcua: OpcUaServerHandle | undefined;
+  const opcuaEnabled = options.opcua?.enabled ?? true;
+  if (opcuaEnabled) {
+    const opcuaPort = options.opcua?.port ?? Number(process.env.ODISERVER_OPCUA_PORT ?? 49320);
+    try {
+      opcua = await startOpcUaServer({
+        engine,
+        store,
+        port: opcuaPort,
+        certsDir: join(dataDir, "certs"),
+        logger,
+      });
+    } catch (err) {
+      logger.error({ err, opcuaPort }, "OPC UA server failed to start");
+    }
+  }
+
   return {
     httpServer,
     store,
     engine,
     port,
     dataDir,
+    opcua,
     async stop() {
       clearTimeout(redeployTimer);
+      await opcua?.stop().catch((err) => logger.error({ err }, "OPC UA server shutdown failed"));
       await stopEmbeddedNodeRed();
       await new Promise<void>((res, rej) =>
         httpServer.close((err) => (err ? rej(err) : res())),
