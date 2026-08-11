@@ -3,7 +3,6 @@ import {
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
   type ColumnDef,
@@ -19,7 +18,6 @@ interface DataGridProps<TData> {
   selectedRowId?: string | null;
   onRowSelect?: (row: TData) => void;
   emptyMessage?: string;
-  pageSize?: number;
   ariaLabel?: string;
 }
 
@@ -33,7 +31,6 @@ export function DataGrid<TData>({
   selectedRowId,
   onRowSelect,
   emptyMessage = 'No rows to display.',
-  pageSize = 10,
   ariaLabel,
 }: DataGridProps<TData>) {
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -48,14 +45,10 @@ export function DataGrid<TData>({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     getRowId,
-    initialState: { pagination: { pageSize } },
-    autoResetPageIndex: false,
   });
 
   const rows = table.getRowModel().rows;
-  const { pageIndex } = table.getState().pagination;
 
   return (
     <div className="flex h-full flex-col">
@@ -172,29 +165,6 @@ export function DataGrid<TData>({
           {table.getFilteredRowModel().rows.length} row
           {table.getFilteredRowModel().rows.length === 1 ? '' : 's'}
         </span>
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Previous page"
-            onClick={() => table.previousPage()}
-            disabled={!table.getCanPreviousPage()}
-            className={`flex h-5 w-5 items-center justify-center rounded-sm enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}
-          >
-            ‹
-          </button>
-          <span className="tabular-nums">
-            Page {rows.length === 0 ? 0 : pageIndex + 1} of {table.getPageCount()}
-          </span>
-          <button
-            type="button"
-            aria-label="Next page"
-            onClick={() => table.nextPage()}
-            disabled={!table.getCanNextPage()}
-            className={`flex h-5 w-5 items-center justify-center rounded-sm enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-40 ${focusRing}`}
-          >
-            ›
-          </button>
-        </div>
       </div>
     </div>
   );
