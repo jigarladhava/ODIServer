@@ -195,4 +195,47 @@ describe("tag CSV export/import", () => {
     const after = (await (await fetch(`${base}/api/tags?parent=d1`)).json()) as unknown[];
     expect(after).toEqual(before);
   });
+
+  it("importing another device's CSV copies tags with fresh IDs instead of moving them", async () => {
+    const csv = await (await fetch(`${base}/api/tags/export?device=d1&format=csv`)).text();
+    const d1Before = (await (await fetch(`${base}/api/tags?parent=d1`)).json()) as { id: string; name: string }[];
+
+    const res = await post("/api/tags/import?device=d2", csv, "text/csv");
+    expect(res.status).toBe(201);
+
+    // Source device untouched.
+    const d1After = (await (await fetch(`${base}/api/tags?parent=d1`)).json()) as { id: string; name: string }[];
+    expect(d1After).toEqual(d1Before);
+
+    // Target device got copies: same names, new IDs bound to d2.
+    const d2Tags = (await (await fetch(`${base}/api/tags?parent=d2`)).json()) as {
+      id: string;
+      name: string;
+      deviceId: string;
+    }[];
+    const d1Ids = new Set(d1Before.map((t) => t.id));
+    for (const source of d1Before) {
+      const copy = d2Tags.find((t) => t.name === source.name);
+      expect(copy, `copy of ${source.name}`).toBeDefined();
+      expect(copy!.deviceId).toBe("d2");
+      expect(d1Ids.has(copy!.id)).toBe(false);
+    }
+  });
+
+  it("importing another device's JSON array copies tags with fresh IDs instead of moving them", async () => {
+    const json = await (await fetch(`${base}/api/tags/export?device=d1&format=json`)).json();
+    const d1Before = (await (await fetch(`${base}/api/tags?parent=d1`)).json()) as { id: string; name: string }[];
+
+    const res = await post("/api/tags/import?device=d2", json);
+    expect(res.status).toBe(201);
+
+    const d1After = (await (await fetch(`${base}/api/tags?parent=d1`)).json()) as { id: string; name: string }[];
+    expect(d1After).toEqual(d1Before);
+
+    const d2Tags = (await (await fetch(`${base}/api/tags?parent=d2`)).json()) as { id: string; name: string }[];
+    const d1Ids = new Set(d1Before.map((t) => t.id));
+    const copies = d2Tags.filter((t) => d1Before.some((s) => s.name === t.name));
+    expect(copies.length).toBeGreaterThanOrEqual(d1Before.length);
+    for (const copy of copies) expect(d1Ids.has(copy.id)).toBe(false);
+  });
 });

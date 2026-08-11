@@ -232,3 +232,38 @@ function slugifyName(name: string): string {
     .replace(/^_+|_+$/g, "");
   return slug || "tag";
 }
+
+/**
+ * Rebind imported tags to the target device, resolving ID collisions so an
+ * import copies tags instead of moving them. Tag IDs live in one global
+ * namespace (upsertTag keys on `id` alone), so a tag exported from device A
+ * and imported into device B would otherwise be *moved* to B.
+ *
+ * An ID is kept only when it already belongs to the target device — that
+ * makes re-importing a file back into the same device an in-place update
+ * (round-trip safe). Any other collision — an ID owned by another device,
+ * or one already claimed by an earlier row in the same import — gets a
+ * fresh `<deviceId>.<slug>` ID with a numeric suffix if needed.
+ */
+export function rebindImportedTags(
+  tags: TagConfig[],
+  deviceId: string,
+  existing: (id: string) => TagConfig | undefined,
+): TagConfig[] {
+  const taken = new Set<string>();
+  const usable = (id: string): boolean => {
+    if (taken.has(id)) return false;
+    const current = existing(id);
+    return current === undefined || current.deviceId === deviceId;
+  };
+  return tags.map((tag) => {
+    let id = tag.id;
+    if (!usable(id)) {
+      const base = `${deviceId}.${slugifyName(tag.name)}`;
+      id = base;
+      for (let n = 2; !usable(id); n++) id = `${base}-${n}`;
+    }
+    taken.add(id);
+    return { ...tag, id, deviceId };
+  });
+}

@@ -4,6 +4,7 @@ import {
   csvToTags,
   parseDeviceExport,
   parseProject,
+  rebindImportedTags,
   tagsToCsv,
   type ConfigStore,
   type TagConfig,
@@ -136,8 +137,12 @@ export function tagTransferRoutes(store: ConfigStore): Router {
         });
         // Validate through the store (schema parse happens in upsertTag).
       }
-      for (const tag of tags) store.upsertTag(tag);
-      res.status(201).json({ imported: { tags: tags.length } });
+      // Imported tags are copies: rebind IDs so tags exported from another
+      // device don't move (IDs are global; re-import into the same device
+      // still updates in place).
+      const rebound = rebindImportedTags(tags, deviceId, (id) => store.getTag(id));
+      for (const tag of rebound) store.upsertTag(tag);
+      res.status(201).json({ imported: { tags: rebound.length } });
     } catch (err) {
       res.status(400).json({ error: errorMessage(err) });
     }
