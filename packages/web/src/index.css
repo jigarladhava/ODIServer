@@ -1,0 +1,67 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ISA-101-inspired palette: neutral grays carry the UI; saturated color is
+   reserved for semantics (quality, state) and a single steel-teal accent. */
+:root {
+  --bg-canvas: #e8eaed;
+  --bg-panel: #f5f6f8;
+  --bg-inset: #ffffff;
+  --bg-hover: #e3e7eb;
+  --bg-selected: #d4e5ec;
+  --border: #c7ccd2;
+  --fg: #1d232b;
+  --fg-muted: #5b6572;
+  --accent: #0e7490;
+  --accent-fg: #ffffff;
+  --quality-good: #2e7d32;
+  --quality-good-bg: #e2f0e3;
+  --quality-bad: #c62828;
+  --quality-bad-bg: #f7e1e1;
+  --quality-uncertain: #9a6200;
+  --quality-uncertain-bg: #f7ecd4;
+}
+
+.dark {
+  --bg-canvas: #15171b;
+  --bg-panel: #1d2025;
+  --bg-inset: #121418;
+  --bg-hover: #272b32;
+  --bg-selected: #173d47;
+  --border: #363c44;
+  --fg: #d6dae1;
+  --fg-muted: #8c95a1;
+  --accent: #3fa7bf;
+  --accent-fg: #0c1114;
+  --quality-good: #57b06a;
+  --quality-good-bg: #16281b;
+  --quality-bad: #e05a5a;
+  --quality-bad-bg: #33191c;
+  --quality-uncertain: #d9a441;
+  --quality-uncertain-bg: #2e2513;
+  color-scheme: dark;
+}
+
+@layer base {
+  body {
+    @apply bg-canvas font-sans text-fg antialiased;
+    font-size: 13px;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  select {
+    background-color: var(--bg-inset);
+    color: var(--fg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+    }
+  }
+}
