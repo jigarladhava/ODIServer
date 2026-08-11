@@ -1,0 +1,14 @@
+{
+  "name": "odiserver-nodered-nodes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ODIServer bridge nodes for the embedded Node-RED runtime.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "node-red": {
+    "version": ">=3.0.0",
+    "nodes": {
+      "odi-tag-in": "odi-tag-in.js"
+    }
+  }
+}

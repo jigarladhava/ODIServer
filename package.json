@@ -1,0 +1,26 @@
+{
+  "name": "odiserver",
+  "version": "0.1.0",
+  "description": "ODIServer - Open Data & Interface Server. Open-source, cross-platform industrial connectivity server.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev -w @odiserver/server",
+    "test": "npm run test --workspaces --if-present",
+    "test:e2e": "tsx scripts/e2e-modbus.ts",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.9"
+  }
+}

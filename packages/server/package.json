@@ -1,0 +1,31 @@
+{
+  "name": "@odiserver/server",
+  "version": "0.1.0",
+  "description": "ODIServer composition root: boots API, tag engine and embedded Node-RED.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@odiserver/api": "*",
+    "@odiserver/core": "*",
+    "@odiserver/drivers": "*",
+    "express": "^4.21.2",
+    "node-red": "^4.0.9",
+    "node-red-contrib-modbus": "^5.43.0",
+    "pino": "^9.5.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.13",
+    "jsmodbus": "^4.0.8"
+  }
+}

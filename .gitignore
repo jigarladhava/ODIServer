@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Runtime data (databases, certs, Node-RED state, smoke-test data)
+data/
+data-smoke/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment / secrets (templates stay tracked)
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Test coverage
+coverage/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

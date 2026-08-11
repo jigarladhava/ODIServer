@@ -1,0 +1,55 @@
+<script type="text/javascript">
+  RED.nodes.registerType('odi-tag-in', {
+    category: 'ODIServer',
+    color: '#2d6a7c',
+    defaults: {
+      name: { value: '' },
+      tagId: { value: '' },
+      deviceId: { value: '' },
+      mode: { value: 'value' },
+      quality: { value: 'bad' },
+      blockOffset: { value: '' },
+      blockCount: { value: '' }
+    },
+    inputs: 1,
+    outputs: 0,
+    icon: 'bridge.svg',
+    label: function () {
+      return this.name || 'odi-tag-in ' + (this.tagId || '')
+    }
+  })
+</script>
+
+<script type="text/html" data-template-name="odi-tag-in">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+  <div class="form-row">
+    <label for="node-input-tagId"><i class="fa fa-tag"></i> Tag ID</label>
+    <input type="text" id="node-input-tagId" placeholder="tag id">
+  </div>
+  <div class="form-row">
+    <label for="node-input-mode"><i class="fa fa-cog"></i> Mode</label>
+    <select id="node-input-mode">
+      <option value="value">value</option>
+      <option value="quality">quality</option>
+      <option value="device-quality">device-quality</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <label for="node-input-quality"><i class="fa fa-cog"></i> Quality</label>
+    <select id="node-input-quality">
+      <option value="bad">bad</option>
+      <option value="uncertain">uncertain</option>
+      <option value="good">good</option>
+    </select>
+  </div>
+</script>
+
+<script type="text/html" data-help-name="odi-tag-in">
+  <p>Pushes a polled driver value into the ODIServer tag engine.</p>
+  <p>In <b>value</b> mode the message payload is written to the configured tag.
+  In <b>quality</b> mode the tag's quality is set (used with catch nodes for
+  driver error propagation).</p>
+</script>
