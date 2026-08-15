@@ -1,0 +1,6 @@
+{
+  "id": "kepserver-import",
+  "name": "KEPServerEX Project (JSON)",
+  "main": "index.js",
+  "fileExtensions": [".json"]
+}
