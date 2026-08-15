@@ -274,7 +274,7 @@ function AgentEditor({
             </Row>
           )}
           <Row label="Deadband" htmlFor="mqtt-deadband">
-            <input id="mqtt-deadband" type="number" inputMode="numeric" min={0} autoComplete="off" value={deadband} onChange={(e) => setDeadband(e.target.value)} className={monoClass} />
+            <input id="mqtt-deadband" type="number" inputMode="decimal" min={0} step="any" autoComplete="off" value={deadband} onChange={(e) => setDeadband(e.target.value)} className={monoClass} />
           </Row>
           <Row label="QoS" htmlFor="mqtt-qos">
             <select id="mqtt-qos" value={qos} onChange={(e) => setQos(e.target.value)} className={selectClass}>

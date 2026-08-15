@@ -634,8 +634,9 @@ function TagForm({
             id="new-tag-deadband"
             name="tagDeadband"
             type="number"
-            inputMode="numeric"
+            inputMode="decimal"
             min={0}
+            step="any"
             autoComplete="off"
             value={deadband}
             onChange={(e) => setDeadband(e.target.value)}

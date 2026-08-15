@@ -563,8 +563,9 @@ function MqttAgentOverrideEditor({
                 <input
                   id={`mqtt-deadband-${agent.id}`}
                   type="number"
-                  inputMode="numeric"
+                  inputMode="decimal"
                   min={0}
+                  step="any"
                   autoComplete="off"
                   placeholder={String(agent.deadband)}
                   value={form.deadband}
@@ -812,8 +813,9 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
         <input
           id="ed-tag-deadband"
           type="number"
-          inputMode="numeric"
+          inputMode="decimal"
           min={0}
+          step="any"
           autoComplete="off"
           value={deadband}
           onChange={(e) => setDeadband(e.target.value)}
