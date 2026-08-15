@@ -16,6 +16,21 @@
 
 Early development. See `docs/architecture.md` for the design and phase roadmap.
 
+## Screenshots
+
+The web configuration console (demo data from `scripts/mock-plant.mjs`, a Modbus TCP simulator):
+
+| | |
+| --- | --- |
+| ![Connectivity overview — channel/device/tag tree with property inspector](screenshots/connectivity-overview.png) | ![Tag grid with live values, quality and timestamps](screenshots/connectivity-tags.png) |
+| *Connectivity overview: channel/device/tag tree, grids and property inspector* | *Tag grid: live values, quality badges and timestamps over WebSocket* |
+| ![MQTT agent configuration](screenshots/mqtt-agent.png) | ![Diagnostics dashboard](screenshots/diagnostics.png) |
+| *Northbound MQTT agent: topic patterns, payload formats, QoS, deadband, LWT* | *Diagnostics: server status, channel and device health at a glance* |
+| ![Server settings](screenshots/settings.png) | ![Dark theme](screenshots/connectivity-tags-dark.png) |
+| *Server settings: ports, data directory, theme* | *Dark theme* |
+
+To regenerate: start the server (`npm run dev`), run `node scripts/mock-plant.mjs` in one terminal, then `node scripts/capture-screenshots.mjs` (requires `npm i --no-save puppeteer-core` and a local Chrome/Edge install).
+
 ## Development
 
 ```bash
