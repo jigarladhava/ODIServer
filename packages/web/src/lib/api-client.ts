@@ -120,6 +120,35 @@ export interface ImportResult {
   mode?: string;
   device?: Device;
   imported: { channels?: number; devices?: number; tags?: number };
+  /** Human-readable notes from importer plugins (skipped content etc.). */
+  warnings?: string[];
+}
+
+export interface ImporterInfo {
+  id: string;
+  name: string;
+  fileExtensions: string[];
+}
+
+/** Third-party project import formats provided by server-side plugins. */
+export function getImporterPlugins(): Promise<ImporterInfo[]> {
+  return request<ImporterInfo[]>('/plugins/importers');
+}
+
+/** Import a project file through an importer plugin (raw file body). */
+export function importProjectWithPlugin(
+  pluginId: string,
+  raw: string,
+  mode: 'replace' | 'merge',
+): Promise<ImportResult> {
+  return request<ImportResult>(
+    `/project/import-plugin/${encodeURIComponent(pluginId)}?mode=${mode}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: raw,
+    },
+  );
 }
 
 export function importProject(project: unknown, mode: 'replace' | 'merge'): Promise<ImportResult> {

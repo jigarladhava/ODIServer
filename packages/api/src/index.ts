@@ -3,8 +3,12 @@ import type { Server as HttpServer } from "node:http";
 import type { ConfigStore, TagEngine } from "@odiserver/core";
 import { entityRoutes, valueRoutes } from "./routes.js";
 import { deviceTransferRoutes, projectTransferRoutes, tagTransferRoutes } from "./transfer-routes.js";
+import { importerRoutes } from "./import-routes.js";
+import type { ImporterPlugin } from "./importers.js";
 import { mqttAgentRoutes, type MqttStatusProvider } from "./mqtt-routes.js";
 import { attachTagWebSocket } from "./ws.js";
+
+export type { ImporterPlugin } from "./importers.js";
 
 export interface ApiOptions {
   store: ConfigStore;
@@ -14,6 +18,8 @@ export interface ApiOptions {
   startedAt?: number;
   /** Northbound MQTT agent manager (optional; enables /api/mqtt-agents/status). */
   mqtt?: MqttStatusProvider;
+  /** Importer plugins discovered at runtime (optional; enables /api/plugins/importers). */
+  importers?: ImporterPlugin[];
 }
 
 /** Build the ODIServer Express app (REST + static web console). */
@@ -43,6 +49,7 @@ export function createApiApp(options: ApiOptions): Express {
   // Transfer routes must be mounted before the generic entity routes so
   // literal paths like /api/tags/export are not captured by "/:id".
   app.use("/api/project", projectTransferRoutes(store));
+  app.use("/api", importerRoutes(store, options.importers ?? []));
   app.use("/api/devices", deviceTransferRoutes(store));
   app.use("/api/tags", tagTransferRoutes(store));
   app.use("/api/channels", entityRoutes("channel", store));

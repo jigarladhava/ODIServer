@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  getImporterPlugins,
   importDevice,
   importProject,
+  importProjectWithPlugin,
   importTags,
+  type ImporterInfo,
   type ImportResult,
 } from '../lib/api-client';
 import { Modal } from './Modal';
@@ -58,7 +61,27 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<string>('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [importers, setImporters] = useState<ImporterInfo[]>([]);
+  const [format, setFormat] = useState<string>('odiserver');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Third-party project formats appear only when a server-side importer
+  // plugin is installed; otherwise the select stays hidden.
+  useEffect(() => {
+    if (target?.kind !== 'project') return;
+    let cancelled = false;
+    getImporterPlugins()
+      .then((list) => {
+        if (!cancelled) setImporters(list);
+      })
+      .catch(() => {
+        // importer listing is best-effort; fall back to the native format
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [target]);
 
   // Reset local state whenever a new import target opens the dialog.
   useEffect(() => {
@@ -67,6 +90,8 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
     setBusy(false);
     setError('');
     setResult('');
+    setWarnings([]);
+    setFormat('odiserver');
   }, [target]);
 
   if (!target) return null;
@@ -79,11 +104,15 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
     setBusy(true);
     setError('');
     setResult('');
+    setWarnings([]);
     try {
       const text = await file.text();
       let importResult: ImportResult;
       if (target.kind === 'project') {
-        importResult = await importProject(JSON.parse(text), mode);
+        importResult =
+          format === 'odiserver'
+            ? await importProject(JSON.parse(text), mode)
+            : await importProjectWithPlugin(format, text, mode);
       } else if (target.kind === 'device') {
         importResult = await importDevice(JSON.parse(text), target.parentId);
       } else {
@@ -94,6 +123,7 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
         );
       }
       setResult(summarize(importResult));
+      setWarnings(importResult.warnings ?? []);
       onImported(target, importResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -112,7 +142,9 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
         className="flex flex-col gap-3"
       >
         <p className="text-[12px] text-muted">
-          {HINTS[target.kind]}
+          {target.kind === 'project' && format !== 'odiserver'
+            ? `Select a ${importers.find((i) => i.id === format)?.name ?? 'third-party'} file to convert and open.`
+            : HINTS[target.kind]}
           {target.parentName && (
             <>
               {' '}
@@ -121,11 +153,40 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           )}
         </p>
 
+        {target.kind === 'project' && importers.length > 0 && (
+          <label className="flex items-center gap-2 text-[12px]">
+            <span className="text-muted">File format</span>
+            <select
+              value={format}
+              onChange={(e) => {
+                setFormat(e.target.value);
+                setError('');
+                setResult('');
+                setWarnings([]);
+              }}
+              aria-label="File format"
+              className={`h-7 rounded-sm border border-border bg-inset px-1.5 text-[12px] text-fg ${focusRing}`}
+            >
+              <option value="odiserver">ODIServer Project</option>
+              {importers.map((imp) => (
+                <option key={imp.id} value={imp.id}>
+                  {imp.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <div className="flex items-center gap-2">
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPT[target.kind]}
+            accept={
+              target.kind === 'project' && format !== 'odiserver'
+                ? (importers.find((i) => i.id === format)?.fileExtensions.join(',') ??
+                  ACCEPT[target.kind])
+                : ACCEPT[target.kind]
+            }
             onChange={(e) => {
               setFile(e.target.files?.[0] ?? null);
               setError('');
@@ -184,6 +245,18 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           <p role="status" className="rounded-sm border border-good/40 bg-good-bg px-2 py-1.5 text-[12px] text-good">
             {result}
           </p>
+        )}
+        {warnings.length > 0 && (
+          <div className="max-h-32 overflow-auto rounded-sm border border-border bg-inset px-2 py-1.5">
+            <p className="text-[11px] font-medium text-muted">
+              {warnings.length} import note(s):
+            </p>
+            <ul className="list-inside list-disc text-[11px] text-fg">
+              {warnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
         )}
 
         <div className="mt-1 flex justify-end gap-2 border-t border-border pt-2.5">

@@ -9,6 +9,7 @@ import { ensureDataDirs, resolveDataDir } from "./datadir.js";
 import { deployDriverFlows, startEmbeddedNodeRed, stopEmbeddedNodeRed } from "./nodered.js";
 import { startOpcUaServer, type OpcUaServerHandle } from "./opcua-server.js";
 import { startMqttAgents, type MqttAgentManager } from "./mqtt/manager.js";
+import { defaultPluginsDir, loadImporterPlugins } from "./plugins/loader.js";
 
 export interface OdiServerHandle {
   httpServer: HttpServer;
@@ -51,12 +52,18 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
   // being unreachable must never take the rest of the server down.
   const mqtt = startMqttAgents({ engine, store, logger, dataDir });
 
+  // Optional importer plugins (e.g. plugins/kepserver-import). Absent plugins
+  // directory simply means no third-party import formats are offered.
+  const pluginsDir = defaultPluginsDir();
+  const importers = pluginsDir ? await loadImporterPlugins(pluginsDir, logger) : [];
+
   const app = createApiApp({
     store,
     engine,
     webDistDir: defaultWebDistDir(),
     startedAt: Date.now(),
     mqtt,
+    importers,
   });
   const httpServer = createServer(app);
   attachTagWebSocket(httpServer, engine);

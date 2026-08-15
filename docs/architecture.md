@@ -68,6 +68,31 @@ Resolved per-OS; override with `ODISERVER_DATA_DIR`:
 
 Contains `odiserver.db`, `nodered/` (flows, settings), `certs/` (OPC UA PKI).
 
+## Importer plugins
+
+Third-party project files (e.g. a KEPServerEX JSON export) are imported through
+optional, folder-based plugins. Discovery is purely runtime: if the plugins
+directory has no plugin folders, the UI offers only the native project format.
+
+- **Location**: `<repo>/plugins/<plugin-id>/` (override with `ODISERVER_PLUGINS_DIR`).
+- **Manifest**: `plugin.json` — `{ "id", "name", "main", "fileExtensions" }`.
+- **Module**: `main` is a plain ESM JavaScript file (no build step) whose
+  default export implements the `ImporterPlugin` contract from
+  `@odiserver/api` (`importProject(raw) → { project, warnings }`, where
+  `project` is any tree accepted by `parseProject`).
+- **Loading**: `packages/server/src/plugins/loader.ts` scans the directory at
+  boot; broken plugins are logged and skipped.
+- **API**: `GET /api/plugins/importers` lists formats;
+  `POST /api/project/import-plugin/:id?mode=replace|merge` converts + imports.
+- **UI**: *Project → Open Project…* gains a "File format" select when at
+  least one importer is installed; conversion warnings are shown after import.
+
+Shipped plugin: `plugins/kepserver-import` — converts KEPServerEX JSON exports
+(driver/data-type/word-order/zero-based-address mapping; skips unsupported
+drivers like Ping with warnings; imports IoT Gateway MQTT clients as disabled
+MQTT agents).
+
+
 ## Phase roadmap
 
 1. **Phase 0** — monorepo scaffold, core (config + tag engine), server skeleton, web console shell
