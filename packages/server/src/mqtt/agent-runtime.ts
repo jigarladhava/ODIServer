@@ -61,6 +61,15 @@ export interface MqttAgentStatus {
 const defaultConnect: MqttConnectFn = (url, options) =>
   mqtt.connect(url, options) as unknown as MqttClientLike;
 
+/**
+ * Ensure the broker URL has a scheme. A bare host[:port] (e.g.
+ * "broker.emqx.io") gets "mqtt://" so mqtt.js doesn't fail with
+ * "Missing protocol".
+ */
+export function normalizeBrokerUrl(url: string): string {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `mqtt://${url}`;
+}
+
 export class MqttAgentRuntime {
   private readonly agent: MqttAgentConfig;
   private readonly engine: TagEngine;
@@ -93,7 +102,7 @@ export class MqttAgentRuntime {
 
     const connectFn = options.connectFn ?? defaultConnect;
     try {
-      this.client = connectFn(this.agent.url, this.buildConnectOptions(options.dataDir));
+      this.client = connectFn(normalizeBrokerUrl(this.agent.url), this.buildConnectOptions(options.dataDir));
     } catch (err) {
       this.statusState = "error";
       this.lastError = err instanceof Error ? err.message : String(err);
@@ -153,7 +162,8 @@ export class MqttAgentRuntime {
     if (agent.clientId) options.clientId = agent.clientId;
     if (agent.username !== undefined) options.username = agent.username;
     if (agent.password !== undefined) options.password = agent.password;
-    if (agent.url.startsWith("mqtts://") || agent.url.startsWith("wss://")) {
+    const url = normalizeBrokerUrl(agent.url);
+    if (url.startsWith("mqtts://") || url.startsWith("wss://")) {
       options.rejectUnauthorized = agent.tls.rejectUnauthorized;
       const readPem = (path: string) =>
         readFileSync(isAbsolute(path) || !dataDir ? path : resolve(dataDir, path));

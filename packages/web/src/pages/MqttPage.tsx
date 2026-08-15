@@ -130,9 +130,9 @@ function AgentEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const save = async (finalUrl: string) => {
     setBusy(true);
     setError('');
     setSaved(false);
@@ -141,7 +141,7 @@ function AgentEditor({
         ...agent,
         name: name.trim(),
         enabled,
-        url: url.trim(),
+        url: finalUrl,
         clientId: clientId.trim(),
         username: username.trim() === '' ? undefined : username.trim(),
         password: password === '' ? undefined : password,
@@ -175,6 +175,26 @@ function AgentEditor({
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmedUrl = url.trim();
+    if (trimmedUrl !== '' && !/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmedUrl)) {
+      // No scheme — ask before assuming plain mqtt://.
+      setPendingUrl(`mqtt://${trimmedUrl}`);
+      return;
+    }
+    await save(trimmedUrl);
+  };
+
+  const onConfirmPendingUrl = async () => {
+    const finalUrl = pendingUrl;
+    setPendingUrl(null);
+    if (finalUrl) {
+      setUrl(finalUrl);
+      await save(finalUrl);
     }
   };
 
@@ -333,6 +353,32 @@ function AgentEditor({
           )}
         </div>
       </form>
+
+      <Modal
+        open={pendingUrl !== null}
+        onClose={() => setPendingUrl(null)}
+        title="Assume mqtt:// Protocol?"
+        footer={
+          <>
+            <button type="button" onClick={() => setPendingUrl(null)} className={buttonClass}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void onConfirmPendingUrl()}
+              className="h-6 rounded-sm border border-accent bg-accent px-3 text-[12px] font-medium text-accent-fg enabled:hover:brightness-110 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+            >
+              Save with mqtt://
+            </button>
+          </>
+        }
+      >
+        <p className="text-[12px] text-fg">
+          The broker URL has no protocol. It will be saved as{' '}
+          <span className="font-mono">{pendingUrl}</span> (plain TCP, default port 1883). Use{' '}
+          <span className="font-mono">mqtts://</span> instead if the broker requires TLS.
+        </p>
+      </Modal>
     </section>
   );
 }

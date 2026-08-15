@@ -92,6 +92,25 @@ describe("MqttAgentRuntime", () => {
     seed.store.close();
   });
 
+  it("defaults the scheme to mqtt:// when the URL has no protocol", () => {
+    const seed = seedStore();
+    const urls: string[] = [];
+    const connectFn = (url: string, _options: IClientOptions) => {
+      urls.push(url);
+      return new FakeMqttClient();
+    };
+    const runtime = new MqttAgentRuntime({
+      agent: MqttAgentSchema.parse({ id: "agent1", name: "Agent 1", url: "broker.emqx.io" }),
+      engine: seed.engine,
+      store: seed.store,
+      connectFn,
+    });
+    expect(urls).toEqual(["mqtt://broker.emqx.io"]);
+    expect(runtime.getStatus().state).toBe("connecting");
+    runtime.stop();
+    seed.store.close();
+  });
+
   it("publishes a snapshot of all tags on connect", () => {
     const seed = seedStore();
     addTag(seed.store, seed.engine, "dev1.t1");
