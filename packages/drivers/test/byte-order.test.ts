@@ -1,4 +1,4 @@
-import { combineRegisters, orderBytes } from "../nodered/byte-order.js";
+import { combineRegisters, orderBytes, splitRegisters } from "../nodered/byte-order.js";
 import { describe, expect, it } from "vitest";
 
 // Reference 32-bit value 0x41424344 across two registers:
@@ -59,5 +59,41 @@ describe("combineRegisters", () => {
     expect(combineRegisters([0x1234], "uint16", "big-endian")).toBe(0x1234);
     expect(combineRegisters([0x1234], "uint16", "byte-swap")).toBe(0x3412);
     expect(combineRegisters([0x8000], "int16", "big-endian")).toBe(-32768);
+  });
+
+  it("decodes the derived types", () => {
+    expect(combineRegisters([0x00ff], "int8", "big-endian")).toBe(-1); // low byte
+    expect(combineRegisters([0x00ff], "uint8", "big-endian")).toBe(255);
+    expect(combineRegisters([0x1234], "bcd", "big-endian")).toBe(1234);
+    expect(combineRegisters([0x1234, 0x5678], "lbcd", "big-endian")).toBe(12345678);
+    expect(combineRegisters([0, 1, 0, 0], "uint64", "big-endian")).toBe(0x100000000);
+    expect(combineRegisters([0, 60], "date", "big-endian")).toBe(
+      new Date(60 * 1000).toISOString(),
+    );
+    expect(Number.isNaN(combineRegisters([0x1a34], "bcd", "big-endian"))).toBe(true);
+  });
+});
+
+describe("splitRegisters", () => {
+  it("round-trips uint32 across all byte orders", () => {
+    for (const order of ["big-endian", "word-swap", "byte-swap", "little-endian"]) {
+      const regs = splitRegisters(0x41424344, "uint32", order);
+      expect(regs).toHaveLength(2);
+      expect(combineRegisters(regs, "uint32", order)).toBe(0x41424344);
+    }
+  });
+
+  it("encodes float32 word-swapped", () => {
+    const regs = splitRegisters(1.0, "float32", "word-swap");
+    expect(regs).toEqual([0x0000, 0x3f80]);
+  });
+
+  it("round-trips bcd, int64 and date", () => {
+    expect(combineRegisters(splitRegisters(1234, "bcd", "big-endian"), "bcd", "big-endian")).toBe(1234);
+    expect(
+      combineRegisters(splitRegisters(0x100000000, "int64", "big-endian"), "int64", "big-endian"),
+    ).toBe(0x100000000);
+    const iso = "2026-08-16T00:00:00.000Z";
+    expect(combineRegisters(splitRegisters(iso, "date", "big-endian"), "date", "big-endian")).toBe(iso);
   });
 });

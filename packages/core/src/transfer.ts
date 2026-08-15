@@ -55,13 +55,18 @@ export const TAG_CSV_COLUMNS = [
   "address",
   "dataType",
   "byteOrder",
+  "access",
   "scanRateMs",
   "deadband",
   "scaling.enabled",
+  "scaling.type",
   "scaling.rawMin",
   "scaling.rawMax",
   "scaling.engMin",
   "scaling.engMax",
+  "scaling.clampLow",
+  "scaling.clampHigh",
+  "scaling.negate",
   "description",
 ] as const;
 
@@ -80,13 +85,18 @@ export function tagsToCsv(tags: TagConfig[]): string {
         csvEscape(tag.address),
         tag.dataType,
         tag.byteOrder,
+        tag.access,
         String(tag.scanRateMs),
         String(tag.deadband),
         tag.scaling.enabled ? "true" : "false",
+        tag.scaling.type,
         String(tag.scaling.rawMin),
         String(tag.scaling.rawMax),
         String(tag.scaling.engMin),
         String(tag.scaling.engMax),
+        tag.scaling.clampLow ? "true" : "false",
+        tag.scaling.clampHigh ? "true" : "false",
+        tag.scaling.negate ? "true" : "false",
         csvEscape(tag.description),
       ].join(","),
     );
@@ -200,6 +210,18 @@ export function csvToTags(text: string, deviceId: string): TagConfig[] {
       throw new Error(`Line ${line}: unknown byteOrder "${byteOrderRaw}" for tag "${name}"`);
     }
     const scalingEnabledRaw = (col(row, "scaling.enabled") ?? "").trim().toLowerCase();
+    const boolCell = (raw: string | undefined) => {
+      const v = (raw ?? "").trim().toLowerCase();
+      return v === "true" || v === "1" || v === "yes";
+    };
+    const accessRaw = (col(row, "access") ?? "").trim() || "rw";
+    if (accessRaw !== "ro" && accessRaw !== "rw") {
+      throw new Error(`Line ${line}: unknown access "${accessRaw}" for tag "${name}" (ro|rw)`);
+    }
+    const scalingTypeRaw = (col(row, "scaling.type") ?? "").trim() || "linear";
+    if (scalingTypeRaw !== "linear" && scalingTypeRaw !== "square-root") {
+      throw new Error(`Line ${line}: unknown scaling.type "${scalingTypeRaw}" for tag "${name}"`);
+    }
 
     const idRaw = col(row, "id")?.trim();
     const tag: TagConfig = TagSchema.parse({
@@ -209,14 +231,19 @@ export function csvToTags(text: string, deviceId: string): TagConfig[] {
       address,
       dataType: dataTypeRaw,
       byteOrder: byteOrderRaw,
+      access: accessRaw,
       scanRateMs: parseNumberCell(col(row, "scanRateMs"), 1000, "scanRateMs", line),
       deadband: parseNumberCell(col(row, "deadband"), 0, "deadband", line),
       scaling: {
-        enabled: scalingEnabledRaw === "true" || scalingEnabledRaw === "1" || scalingEnabledRaw === "yes",
+        enabled: boolCell(col(row, "scaling.enabled")),
+        type: scalingTypeRaw,
         rawMin: parseNumberCell(col(row, "scaling.rawMin"), 0, "scaling.rawMin", line),
         rawMax: parseNumberCell(col(row, "scaling.rawMax"), 100, "scaling.rawMax", line),
         engMin: parseNumberCell(col(row, "scaling.engMin"), 0, "scaling.engMin", line),
         engMax: parseNumberCell(col(row, "scaling.engMax"), 100, "scaling.engMax", line),
+        clampLow: boolCell(col(row, "scaling.clampLow")),
+        clampHigh: boolCell(col(row, "scaling.clampHigh")),
+        negate: boolCell(col(row, "scaling.negate")),
       },
       description: col(row, "description") ?? "",
     });

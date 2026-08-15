@@ -8,7 +8,8 @@
   "node-red": {
     "version": ">=3.0.0",
     "nodes": {
-      "odi-tag-in": "odi-tag-in.js"
+      "odi-tag-in": "odi-tag-in.js",
+      "odi-tag-out": "odi-tag-out.js"
     }
   }
 }

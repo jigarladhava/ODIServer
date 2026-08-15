@@ -53,24 +53,38 @@ export interface OpcUaServerHandle {
 
 const OPCUA_DATA_TYPE: Record<TagConfig["dataType"], DataType> = {
   bool: DataType.Boolean,
+  int8: DataType.SByte,
+  uint8: DataType.Byte,
   int16: DataType.Int16,
   uint16: DataType.UInt16,
   int32: DataType.Int32,
   uint32: DataType.UInt32,
+  int64: DataType.Int64,
+  uint64: DataType.UInt64,
   float32: DataType.Float,
   float64: DataType.Double,
+  bcd: DataType.UInt16,
+  lbcd: DataType.UInt32,
+  date: DataType.String, // ISO 8601 string on the wire
   string: DataType.String,
 };
 
 /** Type names for addVariable — it resolves these to proper NodeIds. */
 const OPCUA_DATA_TYPE_NAME: Record<TagConfig["dataType"], string> = {
   bool: "Boolean",
+  int8: "SByte",
+  uint8: "Byte",
   int16: "Int16",
   uint16: "UInt16",
   int32: "Int32",
   uint32: "UInt32",
+  int64: "Int64",
+  uint64: "UInt64",
   float32: "Float",
   float64: "Double",
+  bcd: "UInt16",
+  lbcd: "UInt32",
+  date: "String",
   string: "String",
 };
 
@@ -168,14 +182,19 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
       });
       for (const tag of tagsByDevice.get(device.id) ?? []) {
         const dataType = OPCUA_DATA_TYPE[tag.dataType];
+        const writable = tag.access === "rw";
         const variable = namespace.addVariable({
           componentOf: deviceNode,
           browseName: tag.name,
           nodeId: `s=${tag.id}`,
           description: tag.description,
           dataType: OPCUA_DATA_TYPE_NAME[tag.dataType],
-          accessLevel: AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite,
-          userAccessLevel: AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite,
+          accessLevel: writable
+            ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
+            : AccessLevelFlag.CurrentRead,
+          userAccessLevel: writable
+            ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
+            : AccessLevelFlag.CurrentRead,
           minimumSamplingInterval: 250,
           value: {
             timestamped_get: () => tagDataValue(tag),
@@ -184,7 +203,7 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
                 engine.write(tag.id, dataValue.value.value as TagPrimitive);
                 callback(null, StatusCodes.Good);
               } catch {
-                callback(null, StatusCodes.Bad);
+                callback(null, StatusCodes.BadNotWritable);
               }
             },
           },

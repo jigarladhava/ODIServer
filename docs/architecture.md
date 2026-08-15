@@ -88,7 +88,9 @@ directory has no plugin folders, the UI offers only the native project format.
   least one importer is installed; conversion warnings are shown after import.
 
 Shipped plugin: `plugins/kepserver-import` — converts KEPServerEX JSON exports
-(driver/data-type/word-order/zero-based-address mapping; skips unsupported
+(driver/data-type/word-order/zero-based-address mapping; per-device comm
+timing, scan mode, block sizes and write-behavior settings; tag read/write
+access and linear/square-root scaling with clamp/negate; skips unsupported
 drivers like Ping with warnings; imports IoT Gateway MQTT clients as disabled
 MQTT agents).
 

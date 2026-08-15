@@ -48,6 +48,39 @@ function deviceHost(device: DeviceConfig): { host: string; port: number; unitId:
   };
 }
 
+/**
+ * Per-device communication tuning
+ * Only what node-red-contrib-modbus actually supports is wired into the
+ * client node: requestTimeoutMs -> clientTimeout, interRequestDelayMs ->
+ * commandDelay. connectTimeoutSec / retryAttempts are stored in settings
+ * for config parity (the modbus stack has no knobs for them).
+ */
+function deviceComm(device: DeviceConfig): { requestTimeoutMs: number; interRequestDelayMs: number } {
+  const s = device.settings as { requestTimeoutMs?: number; interRequestDelayMs?: number };
+  return {
+    requestTimeoutMs:
+      typeof s.requestTimeoutMs === "number" && s.requestTimeoutMs > 0 ? s.requestTimeoutMs : 1000,
+    interRequestDelayMs:
+      typeof s.interRequestDelayMs === "number" && s.interRequestDelayMs >= 0
+        ? s.interRequestDelayMs
+        : 1,
+  };
+}
+
+/**
+ * Effective poll rate for a tag. 
+ * "respect-tag" (default, per-tag scanRateMs) or
+ * "respect-device" (all tags polled at settings.scanModeRateMs).
+ */
+export function effectiveScanRateMs(tag: TagConfig, device: DeviceConfig): number {
+  const s = device.settings as { scanMode?: string; scanModeRateMs?: number };
+  if (s.scanMode === "respect-device") {
+    const rate = typeof s.scanModeRateMs === "number" && s.scanModeRateMs >= 50 ? s.scanModeRateMs : 1000;
+    return rate;
+  }
+  return tag.scanRateMs;
+}
+
 function modbusReadNode(tag: TagConfig, device: DeviceConfig): NodeRedNode[] {
   const parsed = parseModbusAddress(tag.address, tag.dataType);
   const { unitId } = deviceHost(device);
@@ -312,6 +345,7 @@ function modbusBlockReadNodes(block: ReadBlock, device: DeviceConfig): NodeRedNo
 
 function modbusClientNode(device: DeviceConfig): NodeRedNode {
   const { host, port, unitId } = deviceHost(device);
+  const comm = deviceComm(device);
   return {
     id: clientNodeId(device.id),
     type: "modbus-client",
@@ -326,8 +360,8 @@ function modbusClientNode(device: DeviceConfig): NodeRedNode {
     tcpPort: String(port),
     tcpType: "DEFAULT",
     unit_id: String(unitId),
-    commandDelay: "1",
-    clientTimeout: "1000",
+    commandDelay: String(comm.interRequestDelayMs),
+    clientTimeout: String(comm.requestTimeoutMs),
     reconnectOnTimeout: true,
     reconnectTimeout: "2000",
     parallelUnitIdsAllowed: true,
@@ -335,6 +369,57 @@ function modbusClientNode(device: DeviceConfig): NodeRedNode {
     showWarnings: true,
     showLogs: false,
   };
+}
+
+/* ------------------------------------------------------------------ *
+ * Writes
+ *
+ * Writable tags (access "rw" on the coil/holding tables) get a pair of
+ * nodes: an odi-tag-out bridge that turns engine "write" events into
+ * wire-format register values, feeding a modbus-write node.
+ *
+ * Limitations of the underlying modbus stack (settings are stored in
+ * device/channel settings for parity but cannot be applied):
+ *   - FC05/06 vs FC15/16 selection (settings.useFc05Fc06): modbus-write
+ *     picks the function code itself from the data type and quantity.
+ *   - FC22 masked writes (settings.bitMaskWrites): not supported.
+ *   - Channel write optimization (writeOptimizationMethod/dutyCycle):
+ *     writes are forwarded immediately ("write all values" behavior).
+ * ------------------------------------------------------------------ */
+
+function modbusWriteNodes(tag: TagConfig, device: DeviceConfig, parsed: ParsedModbusAddress): NodeRedNode[] {
+  const { unitId } = deviceHost(device);
+  const writeId = `odi-write-${tag.id}`;
+  const outId = `odi-out-${tag.id}`;
+  return [
+    {
+      id: outId,
+      type: "odi-tag-out",
+      z: ODI_TAB_ID,
+      name: `out:${tag.name}`,
+      tagId: tag.id,
+      wires: [[writeId]],
+    },
+    {
+      id: writeId,
+      type: "modbus-write",
+      z: ODI_TAB_ID,
+      name: `write:${tag.name}`,
+      unitid: String(unitId),
+      dataType: parsed.table === "coil" ? "Coil" : "HoldingRegister",
+      adr: String(parsed.offset),
+      quantity: String(parsed.registerCount),
+      server: clientNodeId(device.id),
+      emptyMsgOnFail: false,
+      keepMsgProperties: true,
+      showStatusActivities: false,
+      showErrors: true,
+      showWarnings: true,
+      delayOnStart: false,
+      startDelayTime: "1",
+      wires: [[], []],
+    },
+  ];
 }
 
 /**
@@ -398,8 +483,19 @@ export function generateFlows(project: ProjectConfig): NodeRedNode[] {
 
     nodes.push(modbusClientNode(device));
     nodes.push(...deviceStatusNodes(device));
+
+    // Writes: rw tags on the coil/holding tables get bridge + write nodes.
+    for (const tag of tags) {
+      if (tag.access !== "rw") continue;
+      const parsed = parseModbusAddress(tag.address, tag.dataType);
+      if (parsed.table !== "coil" && parsed.table !== "holding") continue;
+      nodes.push(...modbusWriteNodes(tag, device, parsed));
+    }
+
+    // Reads: honor the device scan mode by folding it into the tag rate.
+    const effectiveTags = tags.map((t) => ({ ...t, scanRateMs: effectiveScanRateMs(t, device) }));
     const options = blockReadOptions(device);
-    for (const block of groupTagsIntoBlocks(tags, options)) {
+    for (const block of groupTagsIntoBlocks(effectiveTags, options)) {
       if (block.members.length === 1) {
         nodes.push(...modbusReadNode(block.members[0].tag, device));
       } else {

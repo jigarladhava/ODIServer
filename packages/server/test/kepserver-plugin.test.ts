@@ -135,12 +135,28 @@ describe("kepserver-import plugin", () => {
     const { project, warnings } = plugin.importProject(FIXTURE);
 
     expect(project.channels).toEqual([
-      { id: "well-station", name: "Well Station", driver: "modbus-tcp", enabled: true, settings: {} },
+      {
+        id: "well-station",
+        name: "Well Station",
+        driver: "modbus-tcp",
+        enabled: true,
+        settings: { writeOptimizationMethod: 0, writeDutyCycle: 10 },
+      },
     ]);
     expect(warnings.some((w) => w.includes('driver "Ping" is not supported'))).toBe(true);
 
     const [pump1, pump2] = project.devices;
-    expect(pump1.settings).toEqual({ host: "10.1.2.3", port: 502, unitId: 2 });
+    expect(pump1.settings).toMatchObject({
+      host: "10.1.2.3",
+      port: 502,
+      unitId: 2,
+      requestTimeoutMs: 1000,
+      connectTimeoutSec: 3,
+      retryAttempts: 3,
+      interRequestDelayMs: 0,
+      scanMode: "respect-tag",
+      scanModeRateMs: 1000,
+    });
     expect(pump1.enabled).toBe(true);
     expect(pump2.enabled).toBe(false); // DEVICE_DATA_COLLECTION false
 
@@ -196,8 +212,9 @@ describe("kepserver-import plugin", () => {
     expect(project.devices).toHaveLength(735);
     expect(project.tags).toHaveLength(13201);
     expect(project.mqttAgents).toHaveLength(1);
-    // 12 skipped Ping channels + 1 MQTT agent note.
-    expect(warnings).toHaveLength(13);
+    // 12 skipped Ping channels + 1 demand-poll scan-mode note + 1 MQTT agent note.
+    expect(warnings).toHaveLength(14);
+    expect(warnings.some((w) => w.includes("demand poll only"))).toBe(true);
     // Tag ids are globally unique (store PK).
     expect(new Set(project.tags.map((t) => t.id)).size).toBe(project.tags.length);
   });

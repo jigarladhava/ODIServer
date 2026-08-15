@@ -1,9 +1,9 @@
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { createEntity } from '../lib/api-client';
 import { slugify, uniqueId } from '../lib/ids';
-import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, isRegisterDataType } from '../lib/labels';
+import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, DATA_TYPE_OPTIONS, isRegisterDataType } from '../lib/labels';
 import { useProject } from '../lib/project';
-import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, Tag } from '../lib/types';
+import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, Tag, TagAccess } from '../lib/types';
 import { Modal } from './Modal';
 
 export interface CreateTarget {
@@ -30,16 +30,7 @@ const DRIVERS: { value: Driver; label: string }[] = [
   { value: 'opcua-client', label: 'OPC UA Client' },
 ];
 
-const DATA_TYPES: DataType[] = [
-  'bool',
-  'int16',
-  'uint16',
-  'int32',
-  'uint32',
-  'float32',
-  'float64',
-  'string',
-];
+const DATA_TYPES: DataType[] = DATA_TYPE_OPTIONS;
 
 function Field({
   label,
@@ -225,6 +216,10 @@ function DeviceForm({
   const [unitId, setUnitId] = useState('1');
   const [blockReads, setBlockReads] = useState(true);
   const [maxBlockSize, setMaxBlockSize] = useState('120');
+  const [requestTimeoutMs, setRequestTimeoutMs] = useState('1000');
+  const [interRequestDelayMs, setInterRequestDelayMs] = useState('0');
+  const [scanMode, setScanMode] = useState('respect-tag');
+  const [scanModeRateMs, setScanModeRateMs] = useState('1000');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -267,7 +262,15 @@ function DeviceForm({
       const settings: Record<string, unknown> = {};
       if (isTcp) Object.assign(settings, { host: host.trim(), port: portNum, unitId: unitNum });
       else if (isRtu) settings.unitId = unitNum;
-      if (isTcp || isRtu) Object.assign(settings, { blockReads, maxBlockSize: blockSizeNum });
+      if (isTcp || isRtu)
+        Object.assign(settings, {
+          blockReads,
+          maxBlockSize: blockSizeNum,
+          requestTimeoutMs: Number(requestTimeoutMs) || 1000,
+          interRequestDelayMs: Number(interRequestDelayMs) || 0,
+          scanMode,
+          scanModeRateMs: Number(scanModeRateMs) || 1000,
+        });
       const device: Device = {
         id: idPreview,
         channelId: channel.id,
@@ -378,6 +381,56 @@ function DeviceForm({
               className={`${inputClass} font-mono tabular-nums`}
             />
           </Field>
+          <Field label="Request Timeout (ms)" htmlFor="new-device-req-timeout">
+            <input
+              id="new-device-req-timeout"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              autoComplete="off"
+              value={requestTimeoutMs}
+              onChange={(e) => setRequestTimeoutMs(e.target.value)}
+              className={`${inputClass} font-mono tabular-nums`}
+            />
+          </Field>
+          <Field label="Inter-Request Delay (ms)" htmlFor="new-device-req-delay">
+            <input
+              id="new-device-req-delay"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              autoComplete="off"
+              value={interRequestDelayMs}
+              onChange={(e) => setInterRequestDelayMs(e.target.value)}
+              className={`${inputClass} font-mono tabular-nums`}
+            />
+          </Field>
+          <Field label="Scan Mode" htmlFor="new-device-scan-mode">
+            <select
+              id="new-device-scan-mode"
+              value={scanMode}
+              onChange={(e) => setScanMode(e.target.value)}
+              className={selectClass}
+            >
+              <option value="respect-tag">Respect tag-specified scan rate</option>
+              <option value="respect-device">Request all data at device rate</option>
+            </select>
+          </Field>
+          {scanMode === 'respect-device' && (
+            <Field label="Device Scan Rate (ms)" htmlFor="new-device-scan-rate">
+              <input
+                id="new-device-scan-rate"
+                type="number"
+                inputMode="numeric"
+                min={50}
+                step={50}
+                autoComplete="off"
+                value={scanModeRateMs}
+                onChange={(e) => setScanModeRateMs(e.target.value)}
+                className={`${inputClass} font-mono tabular-nums`}
+              />
+            </Field>
+          )}
         </>
       )}
       <CheckboxRow id="new-device-enabled" label="Enabled" checked={enabled} onChange={setEnabled} />
@@ -401,13 +454,18 @@ function TagForm({
   const [address, setAddress] = useState('');
   const [dataType, setDataType] = useState<DataType>('uint16');
   const [byteOrder, setByteOrder] = useState<ByteOrder>('big-endian');
+  const [access, setAccess] = useState<TagAccess>('rw');
   const [scanRateMs, setScanRateMs] = useState('1000');
   const [deadband, setDeadband] = useState('0');
   const [scalingEnabled, setScalingEnabled] = useState(false);
+  const [scalingType, setScalingType] = useState<'linear' | 'square-root'>('linear');
   const [rawMin, setRawMin] = useState('0');
   const [rawMax, setRawMax] = useState('65535');
   const [engMin, setEngMin] = useState('0');
   const [engMax, setEngMax] = useState('100');
+  const [clampLow, setClampLow] = useState(false);
+  const [clampHigh, setClampHigh] = useState(false);
+  const [negate, setNegate] = useState(false);
   const [description, setDescription] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -448,14 +506,19 @@ function TagForm({
         address: address.trim(),
         dataType,
         ...(isRegisterDataType(dataType) ? { byteOrder } : {}),
+        access,
         scanRateMs: scanNum,
         deadband: deadbandNum,
         scaling: {
           enabled: scalingEnabled,
+          type: scalingType,
           rawMin: Number(rawMin) || 0,
           rawMax: Number(rawMax) || 0,
           engMin: Number(engMin) || 0,
           engMax: Number(engMax) || 0,
+          clampLow,
+          clampHigh,
+          negate,
         },
         description: description.trim(),
       };
@@ -523,6 +586,18 @@ function TagForm({
             ))}
           </select>
         </Field>
+        <Field label="Access" htmlFor="new-tag-access">
+          <select
+            id="new-tag-access"
+            name="tagAccess"
+            value={access}
+            onChange={(e) => setAccess(e.target.value as TagAccess)}
+            className={selectClass}
+          >
+            <option value="ro">Read Only</option>
+            <option value="rw">Read/Write</option>
+          </select>
+        </Field>
         {isRegisterDataType(dataType) && (
           <Field label="Byte Order" htmlFor="new-tag-byteorder">
             <select
@@ -576,6 +651,12 @@ function TagForm({
       />
       {scalingEnabled && (
         <div className="grid grid-cols-2 gap-2.5 rounded-sm border border-border bg-panel p-2.5">
+          <Field label="Scaling Type" htmlFor="new-tag-scaling-type">
+            <select id="new-tag-scaling-type" value={scalingType} onChange={(e) => setScalingType(e.target.value as 'linear' | 'square-root')} className={selectClass}>
+              <option value="linear">Linear</option>
+              <option value="square-root">Square Root</option>
+            </select>
+          </Field>
           <Field label="Raw Min" htmlFor="new-tag-rawmin">
             <input id="new-tag-rawmin" type="number" autoComplete="off" value={rawMin} onChange={(e) => setRawMin(e.target.value)} className={`${inputClass} font-mono tabular-nums`} />
           </Field>
@@ -588,6 +669,11 @@ function TagForm({
           <Field label="Eng Max" htmlFor="new-tag-engmax">
             <input id="new-tag-engmax" type="number" autoComplete="off" value={engMax} onChange={(e) => setEngMax(e.target.value)} className={`${inputClass} font-mono tabular-nums`} />
           </Field>
+          <div className="col-span-2 flex gap-4">
+            <CheckboxRow id="new-tag-clamplow" label="Clamp low" checked={clampLow} onChange={setClampLow} />
+            <CheckboxRow id="new-tag-clamphigh" label="Clamp high" checked={clampHigh} onChange={setClampHigh} />
+            <CheckboxRow id="new-tag-negate" label="Negate" checked={negate} onChange={setNegate} />
+          </div>
         </div>
       )}
       <Field label="Description" htmlFor="new-tag-description">

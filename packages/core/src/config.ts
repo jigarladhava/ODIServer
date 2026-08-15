@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BYTE_ORDERS, DATA_TYPES, DRIVER_TYPES } from "./types.js";
+import { BYTE_ORDERS, DATA_TYPES, DRIVER_TYPES, TAG_ACCESS } from "./types.js";
 
 /**
  * Configuration schema for the channel/device/tag model.
@@ -9,10 +9,17 @@ import { BYTE_ORDERS, DATA_TYPES, DRIVER_TYPES } from "./types.js";
 
 export const ScalingSchema = z.object({
   enabled: z.boolean().default(false),
+  /** linear = straight interpolation; square-root = flow-style √ scaling. */
+  type: z.enum(["linear", "square-root"]).default("linear"),
   rawMin: z.number().default(0),
   rawMax: z.number().default(100),
   engMin: z.number().default(0),
   engMax: z.number().default(100),
+  /** Clamp the scaled value to engMin / engMax. */
+  clampLow: z.boolean().default(false),
+  clampHigh: z.boolean().default(false),
+  /** Multiply the scaled value by -1 (applied after clamping). */
+  negate: z.boolean().default(false),
 });
 export type Scaling = z.infer<typeof ScalingSchema>;
 
@@ -129,6 +136,8 @@ export const TagSchema = z.object({
   dataType: z.enum(DATA_TYPES as [string, ...string[]]),
   /** Register byte/word ordering for multi-register values (Modbus). */
   byteOrder: z.enum(BYTE_ORDERS as [string, ...string[]]).default("big-endian"),
+  /** Client write access; "ro" tags reject writes at the engine. */
+  access: z.enum(TAG_ACCESS as [string, ...string[]]).default("rw"),
   scanRateMs: z.number().int().min(50).default(1000),
   /** Absolute deadband on the scaled value; 0 = report every change */
   deadband: z.number().min(0).default(0),

@@ -42,6 +42,12 @@ interface RuntimeTag {
 export class TagEngine extends EventEmitter {
   private tags = new Map<string, RuntimeTag>();
 
+  constructor() {
+    super();
+    // Driver write bridges subscribe per tag — hundreds of listeners are normal.
+    this.setMaxListeners(0);
+  }
+
   /** Load/replace the full tag set (e.g. after config load). Existing values are kept by id. */
   load(configs: TagConfig[]): void {
     const next = new Map<string, RuntimeTag>();
@@ -135,7 +141,9 @@ export class TagEngine extends EventEmitter {
 
   /** Client-initiated write. The driver layer performs the device I/O and confirms via updateRaw(). */
   write(tagId: string, value: TagPrimitive): void {
-    if (!this.tags.has(tagId)) throw new Error(`Unknown tag: ${tagId}`);
+    const tag = this.tags.get(tagId);
+    if (!tag) throw new Error(`Unknown tag: ${tagId}`);
+    if (tag.config.access === "ro") throw new Error(`Tag is read-only: ${tagId}`);
     this.emit("write", { tagId, value });
   }
 
@@ -163,15 +171,29 @@ export function applyScaling(raw: number, scaling: TagConfig["scaling"]): number
   const span = scaling.rawMax - scaling.rawMin;
   if (span === 0) return scaling.engMin;
   const ratio = (raw - scaling.rawMin) / span;
-  return scaling.engMin + ratio * (scaling.engMax - scaling.engMin);
+  const fraction = scaling.type === "square-root" ? Math.sqrt(Math.max(0, ratio)) : ratio;
+  let value = scaling.engMin + fraction * (scaling.engMax - scaling.engMin);
+  if (scaling.clampLow) value = Math.max(value, scaling.engMin);
+  if (scaling.clampHigh) value = Math.min(value, scaling.engMax);
+  if (scaling.negate) value = -value;
+  return value;
 }
 
 export function coerceToType(value: number, dataType: TagConfig["dataType"]): number {
   switch (dataType) {
+    case "int8":
+    case "uint8":
     case "int16":
     case "uint16":
     case "int32":
     case "uint32":
+    case "bcd":
+    case "lbcd":
+      return Math.round(value);
+    case "int64":
+    case "uint64":
+      // JS numbers hold integers exactly only up to 2^53; values beyond
+      // that lose precision (documented limitation of the number pipeline).
       return Math.round(value);
     case "float32":
       return Math.fround(value);

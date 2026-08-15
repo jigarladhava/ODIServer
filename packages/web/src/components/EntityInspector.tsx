@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { getMqttAgents, updateEntity, writeValue } from '../lib/api-client';
-import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, isRegisterDataType } from '../lib/labels';
+import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, DATA_TYPE_OPTIONS, isRegisterDataType } from '../lib/labels';
 import { useTagValues } from '../lib/live-values';
-import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, MqttAgent, MqttTagOverride, Tag } from '../lib/types';
+import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, MqttAgent, MqttTagOverride, Tag, TagAccess } from '../lib/types';
 
 interface EntityInspectorProps {
   kind: EntityKind;
@@ -26,16 +26,7 @@ const DRIVERS: { value: Driver; label: string }[] = [
   { value: 'opcua-client', label: 'OPC UA Client' },
 ];
 
-const DATA_TYPES: DataType[] = [
-  'bool',
-  'int16',
-  'uint16',
-  'int32',
-  'uint32',
-  'float32',
-  'float64',
-  'string',
-];
+const DATA_TYPES: DataType[] = DATA_TYPE_OPTIONS;
 
 function Row({
   label,
@@ -215,6 +206,10 @@ function DeviceEditor({
     unitId?: number;
     blockReads?: boolean;
     maxBlockSize?: number;
+    requestTimeoutMs?: number;
+    interRequestDelayMs?: number;
+    scanMode?: string;
+    scanModeRateMs?: number;
   };
   const [name, setName] = useState(entity.name);
   const [enabled, setEnabled] = useState(entity.enabled);
@@ -223,6 +218,10 @@ function DeviceEditor({
   const [unitId, setUnitId] = useState(String(settings.unitId ?? 1));
   const [blockReads, setBlockReads] = useState(settings.blockReads ?? true);
   const [maxBlockSize, setMaxBlockSize] = useState(String(settings.maxBlockSize ?? 120));
+  const [requestTimeoutMs, setRequestTimeoutMs] = useState(String(settings.requestTimeoutMs ?? 1000));
+  const [interRequestDelayMs, setInterRequestDelayMs] = useState(String(settings.interRequestDelayMs ?? 0));
+  const [scanMode, setScanMode] = useState(settings.scanMode ?? 'respect-tag');
+  const [scanModeRateMs, setScanModeRateMs] = useState(String(settings.scanModeRateMs ?? 1000));
   const { busy, error, saved, save } = useSave(onSaved);
 
   const isTcp = parentDriver === 'modbus-tcp';
@@ -247,6 +246,10 @@ function DeviceEditor({
         if (isTcp || isRtu) {
           nextSettings.blockReads = blockReads;
           nextSettings.maxBlockSize = Number(maxBlockSize);
+          nextSettings.requestTimeoutMs = Number(requestTimeoutMs);
+          nextSettings.interRequestDelayMs = Number(interRequestDelayMs);
+          nextSettings.scanMode = scanMode;
+          nextSettings.scanModeRateMs = Number(scanModeRateMs);
         }
         void save(() =>
           updateEntity('device', entity.id, {
@@ -336,6 +339,56 @@ function DeviceEditor({
               className={monoClass}
             />
           </Row>
+          <Row label="Request timeout (ms)" htmlFor="ed-device-req-timeout">
+            <input
+              id="ed-device-req-timeout"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              autoComplete="off"
+              value={requestTimeoutMs}
+              onChange={(e) => setRequestTimeoutMs(e.target.value)}
+              className={monoClass}
+            />
+          </Row>
+          <Row label="Inter-request delay (ms)" htmlFor="ed-device-req-delay">
+            <input
+              id="ed-device-req-delay"
+              type="number"
+              inputMode="numeric"
+              min={0}
+              autoComplete="off"
+              value={interRequestDelayMs}
+              onChange={(e) => setInterRequestDelayMs(e.target.value)}
+              className={monoClass}
+            />
+          </Row>
+          <Row label="Scan mode" htmlFor="ed-device-scan-mode">
+            <select
+              id="ed-device-scan-mode"
+              value={scanMode}
+              onChange={(e) => setScanMode(e.target.value)}
+              className={selectClass}
+            >
+              <option value="respect-tag">Respect tag-specified scan rate</option>
+              <option value="respect-device">Request all data at device rate</option>
+            </select>
+          </Row>
+          {scanMode === 'respect-device' && (
+            <Row label="Device scan rate (ms)" htmlFor="ed-device-scan-rate">
+              <input
+                id="ed-device-scan-rate"
+                type="number"
+                inputMode="numeric"
+                min={50}
+                step={50}
+                autoComplete="off"
+                value={scanModeRateMs}
+                onChange={(e) => setScanModeRateMs(e.target.value)}
+                className={monoClass}
+              />
+            </Row>
+          )}
         </>
       )}
       <Row label="Enabled" htmlFor="ed-device-enabled">
@@ -584,13 +637,18 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
   const [address, setAddress] = useState(entity.address);
   const [dataType, setDataType] = useState<DataType>(entity.dataType);
   const [byteOrder, setByteOrder] = useState<ByteOrder>(entity.byteOrder ?? 'big-endian');
+  const [access, setAccess] = useState<TagAccess>(entity.access ?? 'rw');
   const [scanRateMs, setScanRateMs] = useState(String(entity.scanRateMs));
   const [deadband, setDeadband] = useState(String(entity.deadband));
   const [scalingEnabled, setScalingEnabled] = useState(entity.scaling.enabled);
+  const [scalingType, setScalingType] = useState<'linear' | 'square-root'>(entity.scaling.type ?? 'linear');
   const [rawMin, setRawMin] = useState(String(entity.scaling.rawMin));
   const [rawMax, setRawMax] = useState(String(entity.scaling.rawMax));
   const [engMin, setEngMin] = useState(String(entity.scaling.engMin));
   const [engMax, setEngMax] = useState(String(entity.scaling.engMax));
+  const [clampLow, setClampLow] = useState(entity.scaling.clampLow ?? false);
+  const [clampHigh, setClampHigh] = useState(entity.scaling.clampHigh ?? false);
+  const [negate, setNegate] = useState(entity.scaling.negate ?? false);
   const [description, setDescription] = useState(entity.description);
   const { busy, error, saved, save } = useSave(onSaved);
 
@@ -652,14 +710,19 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
             address: address.trim(),
             dataType,
             ...(isRegisterDataType(dataType) ? { byteOrder } : {}),
+            access,
             scanRateMs: Number(scanRateMs),
             deadband: Number(deadband),
             scaling: {
               enabled: scalingEnabled,
+              type: scalingType,
               rawMin: Number(rawMin),
               rawMax: Number(rawMax),
               engMin: Number(engMin),
               engMax: Number(engMax),
+              clampLow,
+              clampHigh,
+              negate,
             },
             mqtt: buildMqttOverrides(entity.mqtt, mqttAgents, mqttForms),
             description: description.trim(),
@@ -703,6 +766,17 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
               {DATA_TYPE_LABELS[t]}
             </option>
           ))}
+        </select>
+      </Row>
+      <Row label="Access" htmlFor="ed-tag-access">
+        <select
+          id="ed-tag-access"
+          value={access}
+          onChange={(e) => setAccess(e.target.value as TagAccess)}
+          className={selectClass}
+        >
+          <option value="ro">Read Only</option>
+          <option value="rw">Read/Write</option>
         </select>
       </Row>
       {isRegisterDataType(dataType) && (
@@ -757,6 +831,17 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
       </Row>
       {scalingEnabled && (
         <>
+          <Row label="Scaling Type" htmlFor="ed-tag-scaling-type">
+            <select
+              id="ed-tag-scaling-type"
+              value={scalingType}
+              onChange={(e) => setScalingType(e.target.value as 'linear' | 'square-root')}
+              className={selectClass}
+            >
+              <option value="linear">Linear</option>
+              <option value="square-root">Square Root</option>
+            </select>
+          </Row>
           <Row label="Raw Min" htmlFor="ed-tag-rawmin">
             <input id="ed-tag-rawmin" type="number" autoComplete="off" value={rawMin} onChange={(e) => setRawMin(e.target.value)} className={monoClass} />
           </Row>
@@ -768,6 +853,15 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
           </Row>
           <Row label="Eng Max" htmlFor="ed-tag-engmax">
             <input id="ed-tag-engmax" type="number" autoComplete="off" value={engMax} onChange={(e) => setEngMax(e.target.value)} className={monoClass} />
+          </Row>
+          <Row label="Clamp Low" htmlFor="ed-tag-clamplow">
+            <input id="ed-tag-clamplow" type="checkbox" checked={clampLow} onChange={(e) => setClampLow(e.target.checked)} className="h-3.5 w-3.5 accent-accent" />
+          </Row>
+          <Row label="Clamp High" htmlFor="ed-tag-clamphigh">
+            <input id="ed-tag-clamphigh" type="checkbox" checked={clampHigh} onChange={(e) => setClampHigh(e.target.checked)} className="h-3.5 w-3.5 accent-accent" />
+          </Row>
+          <Row label="Negate" htmlFor="ed-tag-negate">
+            <input id="ed-tag-negate" type="checkbox" checked={negate} onChange={(e) => setNegate(e.target.checked)} className="h-3.5 w-3.5 accent-accent" />
           </Row>
         </>
       )}
@@ -804,29 +898,33 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
         </Row>
       )}
       <Row label="Write Value" htmlFor="ed-tag-write">
-        <span className="flex items-center gap-1.5">
-          <input
-            id="ed-tag-write"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="value…"
-            value={writeRaw}
-            onChange={(e) => setWriteRaw(e.target.value)}
-            className={`${monoClass} max-w-40`}
-          />
-          <button
-            type="button"
-            onClick={onWrite}
-            disabled={writeBusy}
-            className="h-6 rounded-sm border border-border bg-inset px-2 text-[11px] enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
-          >
-            {writeBusy ? 'Writing…' : 'Write'}
-          </button>
-          <span aria-live="polite" className="truncate text-[11px] text-muted" title={writeNote}>
-            {writeNote}
+        {access === 'ro' ? (
+          <span className="text-[11px] text-muted">Tag is read-only.</span>
+        ) : (
+          <span className="flex items-center gap-1.5">
+            <input
+              id="ed-tag-write"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="value…"
+              value={writeRaw}
+              onChange={(e) => setWriteRaw(e.target.value)}
+              className={`${monoClass} max-w-40`}
+            />
+            <button
+              type="button"
+              onClick={onWrite}
+              disabled={writeBusy}
+              className="h-6 rounded-sm border border-border bg-inset px-2 text-[11px] enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+            >
+              {writeBusy ? 'Writing…' : 'Write'}
+            </button>
+            <span aria-live="polite" className="truncate text-[11px] text-muted" title={writeNote}>
+              {writeNote}
+            </span>
           </span>
-        </span>
+        )}
       </Row>
     </EditorShell>
   );

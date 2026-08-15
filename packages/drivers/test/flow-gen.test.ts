@@ -114,6 +114,58 @@ describe("generateFlows", () => {
     expect(errBridge).toMatchObject({ mode: "quality", quality: "bad" });
   });
 
+  it("applies per-device comm settings to the client node", () => {
+    const p = project();
+    p.devices[0].settings = {
+      ...p.devices[0].settings,
+      requestTimeoutMs: 1500,
+      interRequestDelayMs: 25,
+    };
+    const flows = generateFlows(p);
+    const client = flows.find((n) => n.id === "odi-client-dev1")!;
+    expect(client.clientTimeout).toBe("1500");
+    expect(client.commandDelay).toBe("25");
+  });
+
+  it("respect-device scan mode polls every tag at the device rate", () => {
+    const p = project();
+    p.devices[0].settings = {
+      ...p.devices[0].settings,
+      scanMode: "respect-device",
+      scanModeRateMs: 250,
+    };
+    const flows = generateFlows(p);
+    const reads = flows.filter((n) => n.type === "modbus-read");
+    expect(reads.length).toBeGreaterThan(0);
+    for (const read of reads) expect(read.rate).toBe("250");
+  });
+
+  it("generates write bridge + modbus-write nodes for rw tags on writable tables", () => {
+    const p = project();
+    p.tags[0] = { ...p.tags[0], access: "rw" as const }; // tag1: holding uint16
+    p.tags[1] = { ...p.tags[1], access: "rw" as const }; // tag2: holding float32
+    const flows = generateFlows(p);
+    const out = flows.find((n) => n.id === "odi-out-tag1")!;
+    expect(out).toMatchObject({ type: "odi-tag-out", tagId: "tag1", wires: [["odi-write-tag1"]] });
+    const write = flows.find((n) => n.id === "odi-write-tag2")!;
+    expect(write).toMatchObject({
+      type: "modbus-write",
+      dataType: "HoldingRegister",
+      adr: "2",
+      quantity: "2",
+      server: "odi-client-dev1",
+    });
+  });
+
+  it("generates no write nodes for read-only tags", () => {
+    const p = project();
+    p.tags[0] = { ...p.tags[0], access: "ro" as const };
+    p.tags[1] = { ...p.tags[1], access: "ro" as const };
+    const flows = generateFlows(p);
+    expect(flows.filter((n) => n.type === "modbus-write")).toHaveLength(0);
+    expect(flows.filter((n) => n.type === "odi-tag-out")).toHaveLength(0);
+  });
+
   it("all nodes live on the ODI tab", () => {
     const flows = generateFlows(project());
     for (const node of flows.filter((n) => n.type !== "tab")) {

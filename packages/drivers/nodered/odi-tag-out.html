@@ -1,0 +1,33 @@
+<script type="text/javascript">
+  RED.nodes.registerType('odi-tag-out', {
+    category: 'ODIServer',
+    color: '#2d6a7c',
+    defaults: {
+      name: { value: '' },
+      tagId: { value: '' }
+    },
+    inputs: 0,
+    outputs: 1,
+    icon: 'bridge.svg',
+    label: function () {
+      return this.name || 'odi-tag-out ' + (this.tagId || '')
+    }
+  })
+</script>
+
+<script type="text/html" data-template-name="odi-tag-out">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+  <div class="form-row">
+    <label for="node-input-tagId"><i class="fa fa-tag"></i> Tag ID</label>
+    <input type="text" id="node-input-tagId" placeholder="tag id">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="odi-tag-out">
+  <p>Forwards ODIServer tag-engine write requests for one tag to a driver
+  write node (e.g. modbus-write), encoding the value per the tag's dataType
+  and byteOrder.</p>
+</script>

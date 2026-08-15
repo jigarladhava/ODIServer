@@ -20,16 +20,19 @@
 const KEP_DATA_TYPES = {
   0: "string", // String
   1: "bool", // Boolean
-  2: "string", // Char
-  3: "string", // Byte
+  2: "int8", // Char
+  3: "uint8", // Byte
   4: "int16", // Short
   5: "uint16", // Word
   6: "int32", // Long
   7: "uint32", // DWord
   8: "float32", // Float
   9: "float64", // Double
-  13: "float64", // LLong (no int64 in ODIServer; lossy)
-  14: "float64", // QWord (no uint64 in ODIServer; lossy)
+  10: "bcd", // BCD
+  11: "lbcd", // LBCD
+  12: "date", // Date
+  13: "int64", // LLong
+  14: "uint64", // QWord
 };
 
 const KEP_DRIVERS = {
@@ -39,9 +42,20 @@ const KEP_DRIVERS = {
 
 /** Number of 16-bit registers per ODIServer data type. */
 function registerCount(dataType) {
-  if (dataType === "int32" || dataType === "uint32" || dataType === "float32") return 2;
-  if (dataType === "float64") return 4;
-  return 1;
+  switch (dataType) {
+    case "int32":
+    case "uint32":
+    case "float32":
+    case "lbcd":
+    case "date":
+      return 2;
+    case "float64":
+    case "int64":
+    case "uint64":
+      return 4;
+    default:
+      return 1;
+  }
 }
 
 /** Derive a URL/JSON-safe id from a display name (mirrors the web console). */
@@ -171,7 +185,20 @@ function importProject(raw) {
       continue;
     }
     const channelId = uniqueId(slugify(channelName), channelIds);
-    channels.push({ id: channelId, name: channelName, driver, enabled: true, settings: {} });
+    channels.push({
+      id: channelId,
+      name: channelName,
+      driver,
+      enabled: true,
+      settings: {
+        // Write optimization: 0 = write all values, 1 = write latest value
+        // for non-boolean tags, 2 = write latest value for all tags.
+        writeOptimizationMethod: Number(
+          kepChannel["servermain.CHANNEL_WRITE_OPTIMIZATIONS_METHOD"] ?? 0,
+        ),
+        writeDutyCycle: Number(kepChannel["servermain.CHANNEL_WRITE_OPTIMIZATIONS_DUTY_CYCLE"] ?? 10),
+      },
+    });
 
     for (const kepDevice of kepChannel.devices ?? []) {
       const deviceName = kepDevice["common.ALLTYPES_NAME"] ?? "Device";
@@ -184,6 +211,22 @@ function importProject(raw) {
         );
       }
       const port = Number(kepDevice["modbus_ethernet.DEVICE_ETHERNET_PORT_NUMBER"] ?? 502);
+      const scanModeCode = Number(kepDevice["servermain.DEVICE_SCAN_MODE"] ?? 0);
+      if (scanModeCode === 2) {
+        warnings.push(
+          `Device "${channelName}.${deviceName}": Kepware "demand poll only" scan mode is not supported — polling at the device scan rate instead.`,
+        );
+      }
+      // Kepware block sizes are per table; ODIServer uses one limit per
+      // device, so the most restrictive (smallest) configured size wins.
+      const blockSizes = [
+        kepDevice["modbus_ethernet.DEVICE_OUTPUT_COILS"],
+        kepDevice["modbus_ethernet.DEVICE_INPUT_COILS"],
+        kepDevice["modbus_ethernet.DEVICE_INTERNAL_REGISTERS"],
+        kepDevice["modbus_ethernet.DEVICE_HOLDING_REGISTERS"],
+      ]
+        .map(Number)
+        .filter((n) => Number.isFinite(n) && n > 0);
       devices.push({
         id: deviceId,
         channelId,
@@ -193,6 +236,18 @@ function importProject(raw) {
           host: endpoint?.host ?? "127.0.0.1",
           port: Number.isFinite(port) ? port : 502,
           unitId: endpoint?.unitId ?? 1,
+          requestTimeoutMs: Number(kepDevice["servermain.DEVICE_REQUEST_TIMEOUT_MILLISECONDS"] ?? 1000),
+          connectTimeoutSec: Number(kepDevice["servermain.DEVICE_CONNECTION_TIMEOUT_SECONDS"] ?? 3),
+          retryAttempts: Number(kepDevice["servermain.DEVICE_RETRY_ATTEMPTS"] ?? 3),
+          interRequestDelayMs: Number(
+            kepDevice["servermain.DEVICE_INTER_REQUEST_DELAY_MILLISECONDS"] ?? 0,
+          ),
+          scanMode: scanModeCode === 0 ? "respect-tag" : "respect-device",
+          scanModeRateMs: Number(kepDevice["servermain.DEVICE_SCAN_MODE_RATE_MS"] ?? 1000),
+          ...(blockSizes.length > 0 ? { maxBlockSize: Math.min(...blockSizes) } : {}),
+          useFc05Fc06: kepDevice["modbus_ethernet.DEVICE_MODBUS_FUNCTION_05/06"] !== false,
+          bitMaskWrites:
+            kepDevice["modbus_ethernet.DEVICE_HOLDING_REGISTER_BIT_MASK_WRITES"] !== false,
         },
       });
 
@@ -224,6 +279,22 @@ function importProject(raw) {
           : regs === 2 ? (firstWordLow ? "word-swap" : "big-endian")
           : "big-endian";
         const scanRate = Number(kepTag["servermain.TAG_SCAN_RATE_MILLISECONDS"] ?? deviceScanRate);
+        // Scaling: 0 = none, 1 = linear, 2 = square root.
+        const scalingType = Number(kepTag["servermain.TAG_SCALING_TYPE"] ?? 0);
+        const scaling =
+          scalingType === 1 || scalingType === 2
+            ? {
+                enabled: true,
+                type: scalingType === 2 ? "square-root" : "linear",
+                rawMin: Number(kepTag["servermain.TAG_SCALING_RAW_LOW"] ?? 0),
+                rawMax: Number(kepTag["servermain.TAG_SCALING_RAW_HIGH"] ?? 100),
+                engMin: Number(kepTag["servermain.TAG_SCALING_SCALED_LOW"] ?? 0),
+                engMax: Number(kepTag["servermain.TAG_SCALING_SCALED_HIGH"] ?? 100),
+                clampLow: kepTag["servermain.TAG_SCALING_CLAMP_LOW"] === 1,
+                clampHigh: kepTag["servermain.TAG_SCALING_CLAMP_HIGH"] === 1,
+                negate: kepTag["servermain.TAG_SCALING_NEGATE"] === 1,
+              }
+            : undefined;
         tags.push({
           id: uniqueId(`${deviceId}.${slugify(tagName)}`, tagIds),
           deviceId,
@@ -231,7 +302,9 @@ function importProject(raw) {
           address,
           dataType: resolvedType,
           byteOrder,
+          access: Number(kepTag["servermain.TAG_READ_WRITE_ACCESS"] ?? 0) === 1 ? "rw" : "ro",
           scanRateMs: Math.max(50, Number.isFinite(scanRate) ? scanRate : 1000),
+          ...(scaling ? { scaling } : {}),
           description: String(kepTag["common.ALLTYPES_DESCRIPTION"] ?? ""),
         });
       }

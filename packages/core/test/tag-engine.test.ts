@@ -39,6 +39,44 @@ describe("applyScaling", () => {
     const s = { enabled: true, rawMin: 5, rawMax: 5, engMin: 42, engMax: 100 };
     expect(applyScaling(5, s)).toBe(42);
   });
+
+  it("applies square-root scaling", () => {
+    const s = { enabled: true, type: "square-root" as const, rawMin: 0, rawMax: 100, engMin: 0, engMax: 1000 };
+    expect(applyScaling(0, s)).toBe(0);
+    expect(applyScaling(25, s)).toBe(500); // sqrt(25/100) = 0.5
+    expect(applyScaling(100, s)).toBe(1000);
+  });
+
+  it("clamps to the engineering range when configured", () => {
+    const s = {
+      enabled: true,
+      rawMin: 0,
+      rawMax: 100,
+      engMin: 0,
+      engMax: 1000,
+      clampLow: true,
+      clampHigh: true,
+      negate: false,
+    };
+    expect(applyScaling(150, s)).toBe(1000);
+    expect(applyScaling(-10, s)).toBe(0);
+    // Without clamping the same inputs overshoot.
+    expect(applyScaling(150, { ...s, clampHigh: false })).toBe(1500);
+  });
+
+  it("negates after scaling and clamping", () => {
+    const s = {
+      enabled: true,
+      rawMin: 0,
+      rawMax: 100,
+      engMin: 0,
+      engMax: 1000,
+      clampLow: false,
+      clampHigh: false,
+      negate: true,
+    };
+    expect(applyScaling(50, s)).toBe(-500);
+  });
 });
 
 describe("coerceToType", () => {
@@ -143,6 +181,15 @@ describe("TagEngine", () => {
     engine.write("t1", 55);
     expect(writes).toEqual([{ tagId: "t1", value: 55 }]);
     expect(() => engine.write("nope", 1)).toThrow();
+  });
+
+  it("rejects writes to read-only tags", () => {
+    const engine = new TagEngine();
+    engine.load([makeTag({ access: "ro" })]);
+    const writes: unknown[] = [];
+    engine.on("write", (w) => writes.push(w));
+    expect(() => engine.write("t1", 1)).toThrow(/read-only/);
+    expect(writes).toHaveLength(0);
   });
 
   it("ignores raw updates for unknown tags", () => {

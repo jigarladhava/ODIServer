@@ -17,9 +17,20 @@ function makeTag(overrides: Partial<TagConfig> = {}): TagConfig {
     address: "40001",
     dataType: "float32",
     byteOrder: "word-swap",
+    access: "rw",
     scanRateMs: 500,
     deadband: 0.5,
-    scaling: { enabled: true, rawMin: 0, rawMax: 4095, engMin: -40, engMax: 120 },
+    scaling: {
+      enabled: true,
+      type: "linear",
+      rawMin: 0,
+      rawMax: 4095,
+      engMin: -40,
+      engMax: 120,
+      clampLow: false,
+      clampHigh: false,
+      negate: false,
+    },
     mqtt: {},
     description: "Boiler temp, main loop \"A\"",
     ...overrides,
@@ -28,10 +39,23 @@ function makeTag(overrides: Partial<TagConfig> = {}): TagConfig {
 
 describe("tag CSV transfer", () => {
   it("round-trips tags through CSV without data loss", () => {
-    const tags = [makeTag(), makeTag({ id: "d1.t2", name: "Valve", address: "00001", dataType: "bool", byteOrder: "big-endian", scaling: { enabled: false, rawMin: 0, rawMax: 100, engMin: 0, engMax: 100 }, description: "" })];
+    const tags = [makeTag(), makeTag({ id: "d1.t2", name: "Valve", address: "00001", dataType: "bool", byteOrder: "big-endian", access: "ro", scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, description: "" })];
     const csv = tagsToCsv(tags);
     const parsed = csvToTags(csv, "d1");
     expect(parsed).toEqual(tags);
+  });
+
+  it("imports legacy CSV without the new columns using schema defaults", () => {
+    const csv = "name,address,dataType\r\nTemp,40001,uint16\r\n";
+    const [tag] = csvToTags(csv, "d1");
+    expect(tag.access).toBe("rw");
+    expect(tag.scaling).toMatchObject({
+      enabled: false,
+      type: "linear",
+      clampLow: false,
+      clampHigh: false,
+      negate: false,
+    });
   });
 
   it("escapes and parses quoted CSV fields (commas, quotes, CRLF)", () => {

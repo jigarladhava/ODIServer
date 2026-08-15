@@ -18,24 +18,43 @@ export interface TagValue {
 
 export type DataType =
   | "bool"
+  | "int8"
+  | "uint8"
   | "int16"
   | "uint16"
   | "int32"
   | "uint32"
+  | "int64"
+  | "uint64"
   | "float32"
   | "float64"
+  | "bcd"
+  | "lbcd"
+  | "date"
   | "string";
 
 export const DATA_TYPES: readonly DataType[] = [
   "bool",
+  "int8",
+  "uint8",
   "int16",
   "uint16",
   "int32",
   "uint32",
+  "int64",
+  "uint64",
   "float32",
   "float64",
+  "bcd",
+  "lbcd",
+  "date",
   "string",
 ];
+
+/** Tag write access: "ro" tags reject client writes at the engine. */
+export type TagAccess = "ro" | "rw";
+
+export const TAG_ACCESS: readonly TagAccess[] = ["ro", "rw"];
 
 export type DriverType = "modbus-tcp" | "modbus-rtu" | "opcua-client";
 

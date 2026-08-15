@@ -2,17 +2,26 @@ export type Quality = 'good' | 'uncertain' | 'bad';
 export type Driver = 'modbus-tcp' | 'modbus-rtu' | 'opcua-client';
 export type DataType =
   | 'bool'
+  | 'int8'
+  | 'uint8'
   | 'int16'
   | 'uint16'
   | 'int32'
   | 'uint32'
+  | 'int64'
+  | 'uint64'
   | 'float32'
   | 'float64'
+  | 'bcd'
+  | 'lbcd'
+  | 'date'
   | 'string';
 
 export type EntityKind = 'channel' | 'device' | 'tag';
 
 export type ByteOrder = 'big-endian' | 'word-swap' | 'byte-swap' | 'little-endian';
+
+export type TagAccess = 'ro' | 'rw';
 
 export interface Channel {
   id: string;
@@ -32,10 +41,14 @@ export interface Device {
 
 export interface TagScaling {
   enabled: boolean;
+  type: 'linear' | 'square-root';
   rawMin: number;
   rawMax: number;
   engMin: number;
   engMax: number;
+  clampLow: boolean;
+  clampHigh: boolean;
+  negate: boolean;
 }
 
 /** Per-tag, per-agent MQTT publish override; absent fields inherit the agent defaults. */
@@ -57,6 +70,8 @@ export interface Tag {
   name: string;
   address: string;
   dataType: DataType;
+  /** Client write access; "ro" tags reject writes (server defaults to "rw"). */
+  access?: TagAccess;
   scanRateMs: number;
   deadband: number;
   scaling: TagScaling;

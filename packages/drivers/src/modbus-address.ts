@@ -35,8 +35,12 @@ export function registersForDataType(dataType: string): number {
     case "int32":
     case "uint32":
     case "float32":
+    case "lbcd":
+    case "date":
       return 2;
     case "float64":
+    case "int64":
+    case "uint64":
       return 4;
     default:
       return 1;
