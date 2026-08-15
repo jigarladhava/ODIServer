@@ -3,15 +3,17 @@ import Database from "better-sqlite3";
 import {
   ChannelSchema,
   DeviceSchema,
+  MqttAgentSchema,
   ProjectSchema,
   TagSchema,
   type ChannelConfig,
   type DeviceConfig,
+  type MqttAgentConfig,
   type ProjectConfig,
   type TagConfig,
 } from "./config.js";
 
-export type EntityKind = "channel" | "device" | "tag";
+export type EntityKind = "channel" | "device" | "tag" | "mqttAgent";
 
 export interface ConfigChangeEvent {
   kind: EntityKind;
@@ -52,6 +54,10 @@ export class ConfigStore extends EventEmitter {
       CREATE TABLE IF NOT EXISTS tags (
         id TEXT PRIMARY KEY,
         device_id TEXT NOT NULL,
+        data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS mqtt_agents (
+        id TEXT PRIMARY KEY,
         data TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_devices_channel ON devices(channel_id);
@@ -181,6 +187,40 @@ export class ConfigStore extends EventEmitter {
     return false;
   }
 
+  // ---- mqtt agents ----
+
+  listMqttAgents(): MqttAgentConfig[] {
+    const rows = this.db.prepare("SELECT data FROM mqtt_agents").all() as { data: string }[];
+    return rows.map((r) => MqttAgentSchema.parse(JSON.parse(r.data)));
+  }
+
+  getMqttAgent(id: string): MqttAgentConfig | undefined {
+    const row = this.db.prepare("SELECT data FROM mqtt_agents WHERE id = ?").get(id) as
+      | { data: string }
+      | undefined;
+    return row ? MqttAgentSchema.parse(JSON.parse(row.data)) : undefined;
+  }
+
+  upsertMqttAgent(config: MqttAgentConfig): MqttAgentConfig {
+    const parsed = MqttAgentSchema.parse(config);
+    this.db
+      .prepare(
+        "INSERT INTO mqtt_agents (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+      )
+      .run(parsed.id, JSON.stringify(parsed));
+    this.emit("change", { kind: "mqttAgent", action: "upsert", id: parsed.id });
+    return parsed;
+  }
+
+  removeMqttAgent(id: string): boolean {
+    const result = this.db.prepare("DELETE FROM mqtt_agents WHERE id = ?").run(id);
+    if (result.changes > 0) {
+      this.emit("change", { kind: "mqttAgent", action: "remove", id });
+      return true;
+    }
+    return false;
+  }
+
   // ---- whole project ----
 
   getProject(): ProjectConfig {
@@ -188,6 +228,7 @@ export class ConfigStore extends EventEmitter {
       channels: this.listChannels(),
       devices: this.listDevices(),
       tags: this.listTags(),
+      mqttAgents: this.listMqttAgents(),
     };
   }
 
@@ -199,13 +240,15 @@ export class ConfigStore extends EventEmitter {
   replaceProject(project: ProjectConfig): void {
     const parsed = ProjectSchema.parse(project);
     const run = this.db.transaction(() => {
-      this.db.exec("DELETE FROM tags; DELETE FROM devices; DELETE FROM channels;");
+      this.db.exec("DELETE FROM tags; DELETE FROM devices; DELETE FROM channels; DELETE FROM mqtt_agents;");
       const insChannel = this.db.prepare("INSERT INTO channels (id, data) VALUES (?, ?)");
       const insDevice = this.db.prepare("INSERT INTO devices (id, channel_id, data) VALUES (?, ?, ?)");
       const insTag = this.db.prepare("INSERT INTO tags (id, device_id, data) VALUES (?, ?, ?)");
+      const insAgent = this.db.prepare("INSERT INTO mqtt_agents (id, data) VALUES (?, ?)");
       for (const c of parsed.channels) insChannel.run(c.id, JSON.stringify(c));
       for (const d of parsed.devices) insDevice.run(d.id, d.channelId, JSON.stringify(d));
       for (const t of parsed.tags) insTag.run(t.id, t.deviceId, JSON.stringify(t));
+      for (const a of parsed.mqttAgents) insAgent.run(a.id, JSON.stringify(a));
     });
     run();
     this.emit("change", { kind: "channel", action: "upsert", id: "*" });
@@ -238,6 +281,13 @@ export class ConfigStore extends EventEmitter {
             "INSERT INTO tags (id, device_id, data) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET device_id = excluded.device_id, data = excluded.data",
           )
           .run(t.id, t.deviceId, JSON.stringify(t));
+      }
+      for (const a of parsed.mqttAgents) {
+        this.db
+          .prepare(
+            "INSERT INTO mqtt_agents (id, data) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data",
+          )
+          .run(a.id, JSON.stringify(a));
       }
     });
     run();

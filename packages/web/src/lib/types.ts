@@ -38,6 +38,19 @@ export interface TagScaling {
   engMax: number;
 }
 
+/** Per-tag, per-agent MQTT publish override; absent fields inherit the agent defaults. */
+export interface MqttTagOverride {
+  enabled?: boolean;
+  topic?: string;
+  mode?: 'on-change' | 'interval';
+  intervalMs?: number;
+  deadband?: number;
+  qos?: 0 | 1 | 2;
+  retain?: boolean;
+  payloadFormat?: 'default' | 'template';
+  payloadTemplate?: string;
+}
+
 export interface Tag {
   id: string;
   deviceId: string;
@@ -50,12 +63,58 @@ export interface Tag {
   description: string;
   /** Multi-register Modbus assembly order; server defaults to "big-endian". */
   byteOrder?: ByteOrder;
+  /** Per-agent MQTT publish overrides, keyed by agent id. Absent = inherit agent defaults. */
+  mqtt?: Record<string, MqttTagOverride>;
+}
+
+export interface MqttTls {
+  rejectUnauthorized: boolean;
+  caPath?: string;
+  certPath?: string;
+  keyPath?: string;
+}
+
+export interface MqttLwt {
+  enabled: boolean;
+  topic: string;
+  onlinePayload: string;
+  offlinePayload: string;
+}
+
+export interface MqttAgent {
+  id: string;
+  name: string;
+  enabled: boolean;
+  url: string;
+  clientId: string;
+  username?: string;
+  password?: string;
+  keepaliveSec: number;
+  clean: boolean;
+  tls: MqttTls;
+  mode: 'on-change' | 'interval';
+  intervalMs: number;
+  deadband: number;
+  qos: 0 | 1 | 2;
+  retain: boolean;
+  topicPattern: string;
+  payloadFormat: 'default' | 'template';
+  payloadTemplate: string;
+  lwt: MqttLwt;
+}
+
+export interface MqttAgentStatus {
+  state: 'disabled' | 'connecting' | 'connected' | 'error';
+  lastError?: string;
+  publishedCount: number;
+  lastPublishAt?: number;
 }
 
 export interface Project {
   channels: Channel[];
   devices: Device[];
   tags: Tag[];
+  mqttAgents: MqttAgent[];
 }
 
 export interface TagValue {

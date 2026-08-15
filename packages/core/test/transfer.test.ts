@@ -20,6 +20,7 @@ function makeTag(overrides: Partial<TagConfig> = {}): TagConfig {
     scanRateMs: 500,
     deadband: 0.5,
     scaling: { enabled: true, rawMin: 0, rawMax: 4095, engMin: -40, engMax: 120 },
+    mqtt: {},
     description: "Boiler temp, main loop \"A\"",
     ...overrides,
   };

@@ -97,6 +97,7 @@ export function MenuBar({
       label: 'View',
       entries: [
         { label: 'Connectivity', to: '/' },
+        { label: 'MQTT Agents', to: '/mqtt' },
         { label: 'Event Log', to: '/events' },
         { label: 'Diagnostics', to: '/diagnostics' },
       ],

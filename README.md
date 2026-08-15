@@ -1,12 +1,12 @@
 # ODIServer
 
-**O**pen **D**ata & **I**nterface Server — an open-source, cross-platform industrial connectivity server. A KEPServerEX alternative built on an embedded Node-RED driver engine with a native TypeScript tag engine, OPC UA server, and MQTT/Sparkplug B northbound interfaces.
+**O**pen **D**ata & **I**nterface Server — an open-source, cross-platform industrial connectivity server. A KEPServerEX alternative built on an embedded Node-RED driver engine with a native TypeScript tag engine, an OPC UA server, and northbound MQTT publishing.
 
 ## Features (roadmap)
 
 - **Channel / Device / Tag** configuration model
 - **Southbound drivers**: Modbus TCP/RTU, OPC UA client (S7, EtherNet/IP, BACnet planned)
-- **Northbound**: OPC UA Server (node-opcua), MQTT / Sparkplug B Edge-of-Network
+- **Northbound**: OPC UA Server (node-opcua), MQTT publish agents (topic patterns, payload templates, timing modes, deadbands, per-tag overrides; Sparkplug B planned)
 - **Tag engine**: scan groups, linear scaling, deadband, quality + timestamps
 - **Web configuration console**: OT-style engineering tool UI (tree + grids + property inspector), light and dark themes
 - **REST + WebSocket API** for integration

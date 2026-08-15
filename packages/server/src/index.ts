@@ -8,6 +8,7 @@ import { attachTagWebSocket, createApiApp } from "@odiserver/api";
 import { ensureDataDirs, resolveDataDir } from "./datadir.js";
 import { deployDriverFlows, startEmbeddedNodeRed, stopEmbeddedNodeRed } from "./nodered.js";
 import { startOpcUaServer, type OpcUaServerHandle } from "./opcua-server.js";
+import { startMqttAgents, type MqttAgentManager } from "./mqtt/manager.js";
 
 export interface OdiServerHandle {
   httpServer: HttpServer;
@@ -16,6 +17,7 @@ export interface OdiServerHandle {
   port: number;
   dataDir: string;
   opcua: OpcUaServerHandle | undefined;
+  mqtt: MqttAgentManager;
   stop(): Promise<void>;
 }
 
@@ -45,11 +47,16 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
   const engine = new TagEngine();
   engine.load(store.listTags());
 
+  // Northbound MQTT agents. Connections are async and self-healing; a broker
+  // being unreachable must never take the rest of the server down.
+  const mqtt = startMqttAgents({ engine, store, logger, dataDir });
+
   const app = createApiApp({
     store,
     engine,
     webDistDir: defaultWebDistDir(),
     startedAt: Date.now(),
+    mqtt,
   });
   const httpServer = createServer(app);
   attachTagWebSocket(httpServer, engine);
@@ -99,8 +106,10 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
     port,
     dataDir,
     opcua,
+    mqtt,
     async stop() {
       clearTimeout(redeployTimer);
+      mqtt.stop();
       await opcua?.stop().catch((err) => logger.error({ err }, "OPC UA server shutdown failed"));
       await stopEmbeddedNodeRed();
       await new Promise<void>((res, rej) =>

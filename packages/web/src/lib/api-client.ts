@@ -8,6 +8,8 @@
 import type {
   Device,
   EntityKind,
+  MqttAgent,
+  MqttAgentStatus,
   Project,
   ServerStatus,
   ValueChange,
@@ -80,6 +82,34 @@ export function writeValue(tagId: string, value: number | boolean | string): Pro
     method: 'POST',
     body: JSON.stringify({ value }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// MQTT agents (northbound publishing)
+// ---------------------------------------------------------------------------
+
+export function getMqttAgents(): Promise<MqttAgent[]> {
+  return request<MqttAgent[]>('/mqtt-agents');
+}
+
+export function createMqttAgent(config: unknown): Promise<MqttAgent> {
+  return request<MqttAgent>('/mqtt-agents', { method: 'POST', body: JSON.stringify(config) });
+}
+
+export function updateMqttAgent(id: string, config: unknown): Promise<MqttAgent> {
+  return request<MqttAgent>(`/mqtt-agents/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
+export function deleteMqttAgent(id: string): Promise<void> {
+  return request<void>(`/mqtt-agents/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** Live runtime status per agent id (connection state, published count). */
+export function getMqttAgentStatus(): Promise<Record<string, MqttAgentStatus>> {
+  return request<Record<string, MqttAgentStatus>>('/mqtt-agents/status');
 }
 
 // ---------------------------------------------------------------------------

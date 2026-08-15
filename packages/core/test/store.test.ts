@@ -75,4 +75,68 @@ describe("ConfigStore", () => {
     ]);
     store.close();
   });
+
+  it("round-trips MQTT agents with schema defaults", () => {
+    const store = new ConfigStore(":memory:");
+    const saved = store.upsertMqttAgent({
+      id: "agent1",
+      name: "Agent 1",
+      url: "mqtt://localhost:1883",
+    } as never);
+
+    // Defaults applied by the schema.
+    expect(saved.enabled).toBe(true);
+    expect(saved.mode).toBe("on-change");
+    expect(saved.intervalMs).toBe(5000);
+    expect(saved.qos).toBe(0);
+    expect(saved.retain).toBe(false);
+    expect(saved.topicPattern).toBe("odiserver/{channel}/{device}/{tag}");
+    expect(saved.payloadFormat).toBe("default");
+    expect(saved.tls.rejectUnauthorized).toBe(true);
+    expect(saved.lwt.enabled).toBe(false);
+
+    expect(store.getMqttAgent("agent1")?.url).toBe("mqtt://localhost:1883");
+    expect(store.listMqttAgents()).toHaveLength(1);
+    expect(store.removeMqttAgent("agent1")).toBe(true);
+    expect(store.listMqttAgents()).toHaveLength(0);
+    store.close();
+  });
+
+  it("round-trips per-tag MQTT overrides", () => {
+    const store = new ConfigStore(":memory:");
+    store.upsertChannel(channel());
+    store.upsertDevice(device());
+    store.upsertTag({
+      ...tag(),
+      mqtt: { agent1: { enabled: false }, agent2: { topic: "custom/{tag}", deadband: 5 } },
+    } as never);
+
+    const loaded = store.getTag("tag1");
+    expect(loaded?.mqtt.agent1?.enabled).toBe(false);
+    expect(loaded?.mqtt.agent2?.topic).toBe("custom/{tag}");
+    expect(loaded?.mqtt.agent2?.deadband).toBe(5);
+    // A tag without overrides defaults to an empty map.
+    store.upsertTag({ ...tag("tag2") } as never);
+    expect(store.getTag("tag2")?.mqtt).toEqual({});
+    store.close();
+  });
+
+  it("includes MQTT agents in project export/import", () => {
+    const store = new ConfigStore(":memory:");
+    store.upsertChannel(channel());
+    store.upsertDevice(device());
+    store.upsertTag(tag() as never);
+    store.upsertMqttAgent({ id: "agent1", name: "Agent 1", url: "mqtt://localhost:1883" } as never);
+
+    const project = store.getProject();
+    expect(project.mqttAgents).toHaveLength(1);
+
+    const store2 = new ConfigStore(":memory:");
+    store2.replaceProject(JSON.parse(JSON.stringify(project)));
+    expect(store2.listMqttAgents()).toHaveLength(1);
+    expect(store2.getMqttAgent("agent1")?.name).toBe("Agent 1");
+    expect(store2.listTags()).toHaveLength(1);
+    store.close();
+    store2.close();
+  });
 });

@@ -3,6 +3,7 @@ import type { Server as HttpServer } from "node:http";
 import type { ConfigStore, TagEngine } from "@odiserver/core";
 import { entityRoutes, valueRoutes } from "./routes.js";
 import { deviceTransferRoutes, projectTransferRoutes, tagTransferRoutes } from "./transfer-routes.js";
+import { mqttAgentRoutes, type MqttStatusProvider } from "./mqtt-routes.js";
 import { attachTagWebSocket } from "./ws.js";
 
 export interface ApiOptions {
@@ -11,6 +12,8 @@ export interface ApiOptions {
   /** Static dir for the built web console (optional). */
   webDistDir?: string;
   startedAt?: number;
+  /** Northbound MQTT agent manager (optional; enables /api/mqtt-agents/status). */
+  mqtt?: MqttStatusProvider;
 }
 
 /** Build the ODIServer Express app (REST + static web console). */
@@ -45,6 +48,7 @@ export function createApiApp(options: ApiOptions): Express {
   app.use("/api/channels", entityRoutes("channel", store));
   app.use("/api/devices", entityRoutes("device", store));
   app.use("/api/tags", entityRoutes("tag", store));
+  app.use("/api/mqtt-agents", mqttAgentRoutes(store, options.mqtt));
   app.use("/api/values", valueRoutes(engine));
 
   if (webDistDir) {

@@ -1,8 +1,8 @@
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { updateEntity, writeValue } from '../lib/api-client';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { getMqttAgents, updateEntity, writeValue } from '../lib/api-client';
 import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, isRegisterDataType } from '../lib/labels';
 import { useTagValues } from '../lib/live-values';
-import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, Tag } from '../lib/types';
+import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, MqttAgent, MqttTagOverride, Tag } from '../lib/types';
 
 interface EntityInspectorProps {
   kind: EntityKind;
@@ -359,6 +359,226 @@ function parseWriteValue(raw: string): number | boolean | string {
   return raw;
 }
 
+/** Form state for one per-agent MQTT override. Empty string = inherit from the agent. */
+interface MqttOverrideForm {
+  custom: boolean;
+  enabled: boolean;
+  topic: string;
+  mode: '' | 'on-change' | 'interval';
+  intervalMs: string;
+  deadband: string;
+  qos: '' | '0' | '1' | '2';
+  retain: '' | 'yes' | 'no';
+  payloadFormat: '' | 'default' | 'template';
+  payloadTemplate: string;
+}
+
+function defaultMqttForm(): MqttOverrideForm {
+  return {
+    custom: false,
+    enabled: true,
+    topic: '',
+    mode: '',
+    intervalMs: '',
+    deadband: '',
+    qos: '',
+    retain: '',
+    payloadFormat: '',
+    payloadTemplate: '',
+  };
+}
+
+function mqttFormFromOverride(override: MqttTagOverride): MqttOverrideForm {
+  return {
+    custom: true,
+    enabled: override.enabled ?? true,
+    topic: override.topic ?? '',
+    mode: override.mode ?? '',
+    intervalMs: override.intervalMs !== undefined ? String(override.intervalMs) : '',
+    deadband: override.deadband !== undefined ? String(override.deadband) : '',
+    qos: override.qos !== undefined ? (String(override.qos) as '0' | '1' | '2') : '',
+    retain: override.retain === undefined ? '' : override.retain ? 'yes' : 'no',
+    payloadFormat: override.payloadFormat ?? '',
+    payloadTemplate: override.payloadTemplate ?? '',
+  };
+}
+
+/** Build the override map to persist: custom agents get an entry, others inherit. */
+function buildMqttOverrides(
+  existing: Record<string, MqttTagOverride> | undefined,
+  agents: MqttAgent[],
+  forms: Record<string, MqttOverrideForm>,
+): Record<string, MqttTagOverride> {
+  // Keep entries for agents that no longer exist (they reactivate if the agent returns).
+  const mqtt: Record<string, MqttTagOverride> = { ...(existing ?? {}) };
+  for (const agent of agents) {
+    const form = forms[agent.id];
+    if (!form?.custom) {
+      delete mqtt[agent.id];
+      continue;
+    }
+    const override: MqttTagOverride = { enabled: form.enabled };
+    if (form.topic.trim()) override.topic = form.topic.trim();
+    if (form.mode) override.mode = form.mode;
+    if (form.intervalMs.trim()) override.intervalMs = Number(form.intervalMs);
+    if (form.deadband.trim()) override.deadband = Number(form.deadband);
+    if (form.qos) override.qos = Number(form.qos) as 0 | 1 | 2;
+    if (form.retain) override.retain = form.retain === 'yes';
+    if (form.payloadFormat) override.payloadFormat = form.payloadFormat;
+    if (form.payloadTemplate.trim()) override.payloadTemplate = form.payloadTemplate;
+    mqtt[agent.id] = override;
+  }
+  return mqtt;
+}
+
+/** Per-agent override editor rows inside the tag inspector. */
+function MqttAgentOverrideEditor({
+  agent,
+  form,
+  onChange,
+}: {
+  agent: MqttAgent;
+  form: MqttOverrideForm;
+  onChange: (patch: Partial<MqttOverrideForm>) => void;
+}) {
+  return (
+    <>
+      <Row label={agent.name} htmlFor={`mqtt-custom-${agent.id}`}>
+        <label className="flex items-center gap-1.5 text-[12px]">
+          <input
+            id={`mqtt-custom-${agent.id}`}
+            type="checkbox"
+            checked={form.custom}
+            onChange={(e) => onChange({ custom: e.target.checked })}
+            className="h-3.5 w-3.5 accent-accent"
+          />
+          <span className="text-muted">Custom settings (unchecked = use agent defaults)</span>
+        </label>
+      </Row>
+      {form.custom && (
+        <>
+          <Row label="↳ Publish" htmlFor={`mqtt-enabled-${agent.id}`}>
+            <input
+              id={`mqtt-enabled-${agent.id}`}
+              type="checkbox"
+              checked={form.enabled}
+              onChange={(e) => onChange({ enabled: e.target.checked })}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+          </Row>
+          {form.enabled && (
+            <>
+              <Row label="↳ Topic" htmlFor={`mqtt-topic-${agent.id}`}>
+                <input
+                  id={`mqtt-topic-${agent.id}`}
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={agent.topicPattern}
+                  value={form.topic}
+                  onChange={(e) => onChange({ topic: e.target.value })}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="↳ Mode" htmlFor={`mqtt-mode-${agent.id}`}>
+                <select
+                  id={`mqtt-mode-${agent.id}`}
+                  value={form.mode}
+                  onChange={(e) => onChange({ mode: e.target.value as MqttOverrideForm['mode'] })}
+                  className={selectClass}
+                >
+                  <option value="">Inherit ({agent.mode})</option>
+                  <option value="on-change">On Change</option>
+                  <option value="interval">Interval</option>
+                </select>
+              </Row>
+              <Row label="↳ Interval (ms)" htmlFor={`mqtt-interval-${agent.id}`}>
+                <input
+                  id={`mqtt-interval-${agent.id}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={100}
+                  step={100}
+                  autoComplete="off"
+                  placeholder={String(agent.intervalMs)}
+                  value={form.intervalMs}
+                  onChange={(e) => onChange({ intervalMs: e.target.value })}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="↳ Deadband" htmlFor={`mqtt-deadband-${agent.id}`}>
+                <input
+                  id={`mqtt-deadband-${agent.id}`}
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  autoComplete="off"
+                  placeholder={String(agent.deadband)}
+                  value={form.deadband}
+                  onChange={(e) => onChange({ deadband: e.target.value })}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="↳ QoS" htmlFor={`mqtt-qos-${agent.id}`}>
+                <select
+                  id={`mqtt-qos-${agent.id}`}
+                  value={form.qos}
+                  onChange={(e) => onChange({ qos: e.target.value as MqttOverrideForm['qos'] })}
+                  className={selectClass}
+                >
+                  <option value="">Inherit ({agent.qos})</option>
+                  <option value="0">0</option>
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                </select>
+              </Row>
+              <Row label="↳ Retain" htmlFor={`mqtt-retain-${agent.id}`}>
+                <select
+                  id={`mqtt-retain-${agent.id}`}
+                  value={form.retain}
+                  onChange={(e) => onChange({ retain: e.target.value as MqttOverrideForm['retain'] })}
+                  className={selectClass}
+                >
+                  <option value="">Inherit ({agent.retain ? 'yes' : 'no'})</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </Row>
+              <Row label="↳ Payload" htmlFor={`mqtt-payload-${agent.id}`}>
+                <select
+                  id={`mqtt-payload-${agent.id}`}
+                  value={form.payloadFormat}
+                  onChange={(e) =>
+                    onChange({ payloadFormat: e.target.value as MqttOverrideForm['payloadFormat'] })
+                  }
+                  className={selectClass}
+                >
+                  <option value="">Inherit ({agent.payloadFormat})</option>
+                  <option value="default">Default JSON</option>
+                  <option value="template">Custom Template</option>
+                </select>
+              </Row>
+              {form.payloadFormat === 'template' && (
+                <Row label="↳ Template" htmlFor={`mqtt-template-${agent.id}`}>
+                  <textarea
+                    id={`mqtt-template-${agent.id}`}
+                    rows={2}
+                    spellCheck={false}
+                    placeholder='{"tag":"{tag}","value":{value}}'
+                    value={form.payloadTemplate}
+                    onChange={(e) => onChange({ payloadTemplate: e.target.value })}
+                    className="w-full max-w-96 rounded-sm border border-border bg-inset px-1.5 py-1 font-mono text-[12px] text-fg focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                  />
+                </Row>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
   const [name, setName] = useState(entity.name);
   const [address, setAddress] = useState(entity.address);
@@ -373,6 +593,25 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
   const [engMax, setEngMax] = useState(String(entity.scaling.engMax));
   const [description, setDescription] = useState(entity.description);
   const { busy, error, saved, save } = useSave(onSaved);
+
+  // Per-agent MQTT publish overrides for this tag.
+  const [mqttAgents, setMqttAgents] = useState<MqttAgent[]>([]);
+  const [mqttForms, setMqttForms] = useState<Record<string, MqttOverrideForm>>(() => {
+    const out: Record<string, MqttOverrideForm> = {};
+    for (const [agentId, override] of Object.entries(entity.mqtt ?? {})) {
+      out[agentId] = mqttFormFromOverride(override);
+    }
+    return out;
+  });
+  useEffect(() => {
+    getMqttAgents()
+      .then(setMqttAgents)
+      .catch(() => {
+        // Agents section is hidden when the list cannot be loaded.
+      });
+  }, []);
+  const patchMqttForm = (agentId: string, patch: Partial<MqttOverrideForm>) =>
+    setMqttForms((prev) => ({ ...prev, [agentId]: { ...(prev[agentId] ?? defaultMqttForm()), ...patch } }));
 
   const [writeRaw, setWriteRaw] = useState('');
   const [writeNote, setWriteNote] = useState('');
@@ -422,6 +661,7 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
               engMin: Number(engMin),
               engMax: Number(engMax),
             },
+            mqtt: buildMqttOverrides(entity.mqtt, mqttAgents, mqttForms),
             description: description.trim(),
           }),
         );
@@ -541,6 +781,21 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
           className={inputClass}
         />
       </Row>
+      {mqttAgents.length > 0 && (
+        <>
+          <div className="border-b border-border bg-inset px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            MQTT Publishing
+          </div>
+          {mqttAgents.map((agent) => (
+            <MqttAgentOverrideEditor
+              key={agent.id}
+              agent={agent}
+              form={mqttForms[agent.id] ?? defaultMqttForm()}
+              onChange={(patch) => patchMqttForm(agent.id, patch)}
+            />
+          ))}
+        </>
+      )}
       {lastError && (
         <Row label="Last Error">
           <span translate="no" className="break-words font-mono text-[12px]">

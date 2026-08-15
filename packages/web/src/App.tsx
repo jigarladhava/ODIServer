@@ -13,6 +13,7 @@ import { Toolbar } from './components/Toolbar';
 import { ConnectivityPage } from './pages/ConnectivityPage';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { EventLogPage } from './pages/EventLogPage';
+import { MqttPage } from './pages/MqttPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 /** What the Delete action would target, given the current tree/grid selection. */
@@ -186,6 +187,7 @@ export default function App() {
       <main id="main-content" className="flex min-h-0 flex-1 flex-col">
         <Routes>
           <Route path="/" element={<ConnectivityPage />} />
+          <Route path="/mqtt" element={<MqttPage />} />
           <Route path="/events" element={<EventLogPage />} />
           <Route path="/diagnostics" element={<DiagnosticsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
