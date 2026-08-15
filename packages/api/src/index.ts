@@ -27,8 +27,13 @@ export function createApiApp(options: ApiOptions): Express {
   const { store, engine, webDistDir } = options;
   const app = express();
   app.use(express.json());
-  // Tag CSV import posts a text/csv body.
-  app.use(express.text({ type: ["text/csv", "text/plain"], limit: "5mb" }));
+  // Tag CSV import posts a text/csv body. Skip the project importer path —
+  // it mounts its own text parser with a larger limit (see import-routes.ts).
+  const csvTextParser = express.text({ type: ["text/csv", "text/plain"], limit: "5mb" });
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/project/import-plugin/")) return next();
+    csvTextParser(req, res, next);
+  });
 
   app.get("/api/status", (_req: Request, res: Response) => {
     res.json({
