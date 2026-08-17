@@ -1,0 +1,12 @@
+version: 3
+
+# FOSSA flags a false-positive CC-BY-SA-4.0 in the `glob` package README.
+# The CC-BY-SA-4.0 text only applies to the `glob` logo files, which are not
+# shipped in the published npm package (see `glob/package.json` "files": ["dist"]).
+# The package code itself is ISC-licensed. Excluding the README from license
+# scanning removes the false-positive discovered license without affecting
+# the declared license or the dependency graph.
+paths:
+  exclude:
+    - "node_modules/glob/README.md"
+    - "**/node_modules/**/glob/README.md"
