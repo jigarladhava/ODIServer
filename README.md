@@ -22,7 +22,8 @@ The web configuration console (demo data from `scripts/mock-plant.mjs`, a Modbus
 
 | | |
 | --- | --- |
-| ![Connectivity overview — channel/device/tag tree with property inspector](screenshots/connectivity-overview.png) | ![Tag grid with live values, quality and timestamps](screenshots/connectivity-tags.png) |
+| ![Connectivity overview — channel/device/tag tree with property inspector](screenshots/connectivity-overview.png) [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjigarladhava%2FODIServer.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjigarladhava%2FODIServer?ref=badge_shield)
+| ![Tag grid with live values, quality and timestamps](screenshots/connectivity-tags.png) |
 | *Connectivity overview: channel/device/tag tree, grids and property inspector* | *Tag grid: live values, quality badges and timestamps over WebSocket* |
 | ![MQTT agent configuration](screenshots/mqtt-agent.png) | ![Diagnostics dashboard](screenshots/diagnostics.png) |
 | *Northbound MQTT agent: topic patterns, payload formats, QoS, deadband, LWT* | *Diagnostics: server status, channel and device health at a glance* |
@@ -43,3 +44,6 @@ npm run typecheck  # type-check all packages
 ## License
 
 Apache-2.0. See `LICENSE`.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjigarladhava%2FODIServer.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjigarladhava%2FODIServer?ref=badge_large)
