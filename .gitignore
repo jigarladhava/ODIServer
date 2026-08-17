@@ -23,6 +23,7 @@ npm-debug.log*
 
 # Test coverage
 coverage/
+packages/server/test/tmp/
 
 # OS / editor noise
 .DS_Store
