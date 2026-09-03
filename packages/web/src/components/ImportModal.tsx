@@ -267,13 +267,28 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           >
             {result ? 'Close' : 'Cancel'}
           </button>
-          <button
-            type="submit"
-            disabled={busy || !file}
-            className={`h-7 rounded-sm border border-accent bg-accent px-3 text-[12px] font-medium text-accent-fg enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 ${focusRing}`}
-          >
-            {busy ? 'Importing…' : 'Import'}
-          </button>
+          {result ? (
+            <button
+              type="button"
+              onClick={() => {
+                setResult('');
+                setWarnings([]);
+                setFile(null);
+                if (fileInputRef.current) fileInputRef.current.value = '';
+              }}
+              className={`h-7 rounded-sm border border-border bg-inset px-3 text-[12px] hover:bg-hover ${focusRing}`}
+            >
+              Import another
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={busy || !file}
+              className={`h-7 rounded-sm border border-accent bg-accent px-3 text-[12px] font-medium text-accent-fg enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 ${focusRing}`}
+            >
+              {busy ? 'Importing…' : 'Import'}
+            </button>
+          )}
         </div>
       </form>
     </Modal>
