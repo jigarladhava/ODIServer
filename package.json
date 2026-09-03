@@ -6,7 +6,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12"
   },
   "workspaces": [
     "packages/*"
@@ -24,6 +24,11 @@
     "vitest": "^3.2.6"
   },
   "overrides": {
-    "jsonata": "^2.2.0"
+    "jsonata": "^2.2.1",
+    "js-yaml": "^4.3.2",
+    "fast-uri": "^3.1.6",
+    "qs": "^6.16.0",
+    "npm": "^11.19.1",
+    "hexy": "0.3.5"
   }
 }

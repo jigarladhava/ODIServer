@@ -21,7 +21,7 @@
     "express": "^4.21.2",
     "mqtt": "^5.15.2",
     "node-opcua": "^2.176.0",
-    "node-red": "^4.0.9",
+    "node-red": "^5.0.4",
     "node-red-contrib-modbus": "^5.43.0",
     "pino": "^9.5.0",
     "ws": "^8.18.0"

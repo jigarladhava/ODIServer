@@ -1,13 +1,15 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadImporterPlugins } from "../src/plugins/loader.js";
 
+const baseTmp = join(dirname(fileURLToPath(import.meta.url)), "..", "tmp");
 let dir: string;
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "odi-plugins-"));
+  await mkdir(baseTmp, { recursive: true });
+  dir = await mkdtemp(join(baseTmp, "odi-plugins-"));
 
   // Valid plugin.
   await mkdir(join(dir, "good"), { recursive: true });
