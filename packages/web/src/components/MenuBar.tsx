@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useTheme } from '../lib/theme';
 import { MoonIcon, SettingsIcon, SunIcon } from './icons';
 
@@ -27,6 +27,7 @@ interface MenuBarProps {
   onExportDevice?: () => void;
   onImportTags?: () => void;
   onExportTags?: () => void;
+  onAbout: () => void;
 }
 
 const focusRing =
@@ -44,9 +45,9 @@ export function MenuBar({
   onExportDevice,
   onImportTags,
   onExportTags,
+  onAbout,
 }: MenuBarProps) {
   const { theme, toggle } = useTheme();
-  const navigate = useNavigate();
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -113,7 +114,7 @@ export function MenuBar({
       label: 'Help',
       entries: [
         { label: 'Documentation', disabled: true },
-        { label: 'About ODIServer', onClick: () => navigate('/diagnostics') },
+        { label: 'About ODIServer', onClick: onAbout },
       ],
     },
   ];

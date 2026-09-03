@@ -52,6 +52,7 @@ export default function App() {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null);
   const [confirmNewProject, setConfirmNewProject] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const [actionError, setActionError] = useState<string>('');
 
   const nodeId = searchParams.get('node') ?? 'connectivity';
@@ -164,6 +165,7 @@ export default function App() {
         onExportTags={
           selectedDeviceId ? () => runDownload(() => downloadTags(selectedDeviceId, 'csv')) : undefined
         }
+        onAbout={() => setShowAbout(true)}
       />
       <Toolbar
         onNewChannel={() => setCreateTarget({ kind: 'channel' })}
@@ -241,6 +243,37 @@ export default function App() {
         onClose={() => setImportTarget(null)}
         onImported={onImported}
       />
+      <Modal
+        open={showAbout}
+        onClose={() => setShowAbout(false)}
+        title="About ODIServer"
+        footer={
+          <button
+            type="button"
+            onClick={() => setShowAbout(false)}
+            className="h-7 rounded-sm border border-border bg-inset px-3 text-[12px] hover:bg-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          >
+            Close
+          </button>
+        }
+      >
+        <div className="text-[12px] text-fg">
+          <p className="text-[14px] font-semibold">ODIServer</p>
+          <p className="mt-0.5 text-muted">Open Data &amp; Interface Server — v0.1.0</p>
+          <p className="mt-3">
+            Open-source, cross-platform industrial connectivity server with device drivers,
+            a live tag engine, and northbound OPC UA and MQTT interfaces.
+          </p>
+          <div className="mt-3 border-t border-border pt-2">
+            <p>
+              <span className="text-muted">Developer:</span> Jigar Ladhava
+            </p>
+            <p>
+              <span className="text-muted">License:</span> Apache-2.0
+            </p>
+          </div>
+        </div>
+      </Modal>
       <Modal
         open={actionError !== ''}
         onClose={() => setActionError('')}
