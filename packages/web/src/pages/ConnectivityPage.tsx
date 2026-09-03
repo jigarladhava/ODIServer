@@ -271,9 +271,17 @@ export function ConnectivityPage() {
   }, [project, rowId, selection]);
 
   const inspectorParentDriver = (target: { kind: EntityKind; entity: Channel | Device | Tag } | null): Driver | undefined => {
-    if (!project || !target || target.kind !== 'device') return undefined;
-    const device = target.entity as Device;
-    return project.channels.find((c) => c.id === device.channelId)?.driver;
+    if (!project || !target) return undefined;
+    if (target.kind === 'device') {
+      const device = target.entity as Device;
+      return project.channels.find((c) => c.id === device.channelId)?.driver;
+    }
+    if (target.kind === 'tag') {
+      const tag = target.entity as Tag;
+      const device = project.devices.find((d) => d.id === tag.deviceId);
+      return device ? project.channels.find((c) => c.id === device.channelId)?.driver : undefined;
+    }
+    return undefined;
   };
 
   const rootEntries = useMemo<PropertyEntry[]>(() => {

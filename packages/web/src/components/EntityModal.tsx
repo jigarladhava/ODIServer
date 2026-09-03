@@ -450,6 +450,8 @@ function TagForm({
 }) {
   const { project } = useProject();
   const device = project?.devices.find((d) => d.id === parentId);
+  const driver = device ? project?.channels.find((c) => c.id === device.channelId)?.driver : undefined;
+  const isOpcUa = driver === 'opcua-client';
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [dataType, setDataType] = useState<DataType>('uint16');
@@ -483,7 +485,11 @@ function TagForm({
       return;
     }
     if (!address.trim()) {
-      setError('Enter a Modbus address (e.g. 40001).');
+      setError(
+        isOpcUa
+          ? 'Enter an OPC UA NodeId (e.g. ns=2;s=Demo.Static.Scalar.Double).'
+          : 'Enter a Modbus address (e.g. 40001).',
+      );
       return;
     }
     const scanNum = Number(scanRateMs);
@@ -505,7 +511,7 @@ function TagForm({
         name: name.trim(),
         address: address.trim(),
         dataType,
-        ...(isRegisterDataType(dataType) ? { byteOrder } : {}),
+        ...(isOpcUa ? {} : isRegisterDataType(dataType) ? { byteOrder } : {}),
         access,
         scanRateMs: scanNum,
         deadband: deadbandNum,
@@ -558,14 +564,14 @@ function TagForm({
         ID: <span translate="no" className="font-mono">{idPreview}</span>
       </p>
       <div className="grid grid-cols-2 gap-2.5">
-        <Field label="Address" htmlFor="new-tag-address">
+        <Field label={isOpcUa ? 'Node ID' : 'Address'} htmlFor="new-tag-address">
           <input
             id="new-tag-address"
             name="tagAddress"
             type="text"
             autoComplete="off"
             spellCheck={false}
-            placeholder="40001"
+            placeholder={isOpcUa ? 'ns=2;s=Demo.Static.Scalar.Double' : '40001'}
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             className={`${inputClass} font-mono`}
@@ -598,7 +604,7 @@ function TagForm({
             <option value="rw">Read/Write</option>
           </select>
         </Field>
-        {isRegisterDataType(dataType) && (
+        {!isOpcUa && isRegisterDataType(dataType) && (
           <Field label="Byte Order" htmlFor="new-tag-byteorder">
             <select
               id="new-tag-byteorder"

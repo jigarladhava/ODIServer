@@ -633,7 +633,8 @@ function MqttAgentOverrideEditor({
   );
 }
 
-function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
+function TagEditor({ entity, parentDriver, onSaved }: { entity: Tag; parentDriver?: Driver; onSaved: () => void }) {
+  const isOpcUa = parentDriver === 'opcua-client';
   const [name, setName] = useState(entity.name);
   const [address, setAddress] = useState(entity.address);
   const [dataType, setDataType] = useState<DataType>(entity.dataType);
@@ -710,7 +711,7 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
             name: name.trim(),
             address: address.trim(),
             dataType,
-            ...(isRegisterDataType(dataType) ? { byteOrder } : {}),
+            ...(isOpcUa ? {} : isRegisterDataType(dataType) ? { byteOrder } : {}),
             access,
             scanRateMs: Number(scanRateMs),
             deadband: Number(deadband),
@@ -743,13 +744,13 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
           className={monoClass}
         />
       </Row>
-      <Row label="Address" htmlFor="ed-tag-address">
+      <Row label={isOpcUa ? 'Node ID' : 'Address'} htmlFor="ed-tag-address">
         <input
           id="ed-tag-address"
           type="text"
           autoComplete="off"
           spellCheck={false}
-          placeholder="40001"
+          placeholder={isOpcUa ? 'ns=2;s=Demo.Static.Scalar.Double' : '40001'}
           value={address}
           onChange={(e) => setAddress(e.target.value)}
           className={monoClass}
@@ -780,7 +781,7 @@ function TagEditor({ entity, onSaved }: { entity: Tag; onSaved: () => void }) {
           <option value="rw">Read/Write</option>
         </select>
       </Row>
-      {isRegisterDataType(dataType) && (
+      {!isOpcUa && isRegisterDataType(dataType) && (
         <Row label="Byte Order" htmlFor="ed-tag-byteorder">
           <select
             id="ed-tag-byteorder"
@@ -939,5 +940,5 @@ export function EntityInspector({ kind, entity, parentDriver, onSaved }: EntityI
   if (kind === 'device') {
     return <DeviceEditor entity={entity as Device} parentDriver={parentDriver} onSaved={onSaved} />;
   }
-  return <TagEditor entity={entity as Tag} onSaved={onSaved} />;
+  return <TagEditor entity={entity as Tag} parentDriver={parentDriver} onSaved={onSaved} />;
 }
