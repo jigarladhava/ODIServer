@@ -66,33 +66,46 @@ afterAll(async () => {
 }, 30000);
 
 describe("OPC UA server", () => {
-  it("exposes Devices -> device -> tags tree", async () => {
-    const devicesFolder = (await browse("ObjectsFolder")).find((r) => r.browseName.name === "Devices");
-    expect(devicesFolder).toBeDefined();
+  it("exposes channel -> device -> tags tree", async () => {
+    const channel = (await browse("ObjectsFolder")).find((r) => r.browseName.name === "Channel 1");
+    expect(channel).toBeDefined();
+    expect(channel!.nodeId.toString()).toBe("ns=1;s=Channel 1");
 
-    const device = (await browse(devicesFolder!.nodeId.toString())).find((r) => r.browseName.name === "PLC 1");
+    const device = (await browse(channel!.nodeId.toString())).find((r) => r.browseName.name === "PLC 1");
     expect(device).toBeDefined();
+    expect(device!.nodeId.toString()).toBe("ns=1;s=Channel 1.PLC 1");
 
     const tagNames = (await browse(device!.nodeId.toString())).map((r) => r.browseName.name).sort();
-    expect(tagNames).toEqual(["Count", "Running", "Temp"]);
+    expect(tagNames).toEqual(["Count", "Running", "Temp", "_Statistics", "_System"]);
+  });
+
+  it("exposes per-device _System and _Statistics nodes", async () => {
+    const system = (await browse("ns=1;s=Channel 1.PLC 1._System")).map((r) => r.browseName.name).sort();
+    expect(system).toEqual(["_Description", "_Enabled", "_Error"]);
+
+    const stats = (await browse("ns=1;s=Channel 1.PLC 1._Statistics")).map((r) => r.browseName.name).sort();
+    expect(stats).toEqual(["_FailedReads", "_FailedWrites", "_SuccessfulReads", "_SuccessfulWrites"]);
+
+    const enabled = await session.readVariableValue("ns=1;s=Channel 1.PLC 1._System._Enabled");
+    expect(enabled.value.value).toBe(true);
   });
 
   it("serves live tag values with quality", async () => {
     engine.updateRaw("d1.temp", 21.5);
-    const good = await session.readVariableValue("ns=1;s=d1.temp");
+    const good = await session.readVariableValue("ns=1;s=Channel 1.PLC 1.Temp");
     expect(good.statusCode).toEqual(StatusCodes.Good);
     expect(good.value.value).toBeCloseTo(21.5, 5);
 
     engine.setQuality("d1.temp", "bad", "comm failure");
-    const bad = await session.readVariableValue("ns=1;s=d1.temp");
+    const bad = await session.readVariableValue("ns=1;s=Channel 1.PLC 1.Temp");
     expect(bad.statusCode).toEqual(StatusCodes.Bad);
   });
 
   it("maps tag datatypes to OPC UA datatypes", async () => {
     // The DataType attribute is a NodeId into ns=0 (e.g. i=1 is Boolean).
-    const running = await session.read({ nodeId: "ns=1;s=d1.running", attributeId: AttributeIds.DataType });
+    const running = await session.read({ nodeId: "ns=1;s=Channel 1.PLC 1.Running", attributeId: AttributeIds.DataType });
     expect(running.value.value.value).toBe(DataType.Boolean);
-    const count = await session.read({ nodeId: "ns=1;s=d1.count", attributeId: AttributeIds.DataType });
+    const count = await session.read({ nodeId: "ns=1;s=Channel 1.PLC 1.Count", attributeId: AttributeIds.DataType });
     expect(count.value.value.value).toBe(DataType.UInt16);
   });
 
@@ -107,7 +120,7 @@ describe("OPC UA server", () => {
     });
     try {
       const item = await subscription.monitor(
-        { nodeId: "ns=1;s=d1.count", attributeId: AttributeIds.Value },
+        { nodeId: "ns=1;s=Channel 1.PLC 1.Count", attributeId: AttributeIds.Value },
         { samplingInterval: 50, discardOldest: true, queueSize: 10 },
         TimestampsToReturn.Both,
       );
@@ -131,7 +144,7 @@ describe("OPC UA server", () => {
   it("forwards client writes to the tag engine", async () => {
     const written = new Promise<unknown>((resolveWrite) => engine.once("write", (req) => resolveWrite(req)));
     const status = await session.write({
-      nodeId: "ns=1;s=d1.count",
+      nodeId: "ns=1;s=Channel 1.PLC 1.Count",
       attributeId: AttributeIds.Value,
       value: new DataValue({ value: new Variant({ dataType: DataType.UInt16, value: 42 }) }),
     });
@@ -142,9 +155,9 @@ describe("OPC UA server", () => {
   it("publishes config changes (new tags become browsable)", async () => {
     store.upsertTag({ id: "d1.extra", deviceId: "d1", name: "Extra", address: "40010", dataType: "int16" } as TagConfig);
     await new Promise((r) => setTimeout(r, 1000)); // rebuild is debounced (250ms)
-    const device = await session.read({ nodeId: "ns=1;s=device:d1", attributeId: AttributeIds.BrowseName });
+    const device = await session.read({ nodeId: "ns=1;s=Channel 1.PLC 1", attributeId: AttributeIds.BrowseName });
     expect(device.statusCode).toEqual(StatusCodes.Good);
-    const value = await session.readVariableValue("ns=1;s=d1.extra");
+    const value = await session.readVariableValue("ns=1;s=Channel 1.PLC 1.Extra");
     expect(value.statusCode).toEqual(StatusCodes.Bad); // configured but no data yet
   });
 });

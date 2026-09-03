@@ -15,6 +15,7 @@ import {
 import type { Logger } from "pino";
 import type {
   ConfigStore,
+  DeviceConfig,
   Quality,
   TagConfig,
   TagEngine,
@@ -22,13 +23,18 @@ import type {
 } from "@odiserver/core";
 
 /**
- * Northbound OPC UA server: exposes the project's devices and tags as a
- * browsable address space:
+ * Northbound OPC UA server: exposes the project's channels, devices and tags
+ * as a browsable address space:
  *
  *   Objects
- *     └── Devices
- *           └── <device name>            (object, nodeId s=device:<deviceId>)
- *                 └── <tag name>         (variable, nodeId s=<tagId>)
+ *     └── <channel name>                  (object, nodeId s=<channel>)
+ *           └── <device name>             (object, nodeId s=<channel>.<device>)
+ *                 ├── _System             (_Enabled, _Error, _Description)
+ *                 ├── _Statistics         (_SuccessfulReads, _FailedReads, ...)
+ *                 └── <tag name>          (variable, nodeId s=<channel>.<device>.<tag>)
+ *
+ * NodeIds are dot-delimited display-name paths in the server's own namespace
+ * (ns=1).
  *
  * Reads are served from the tag engine (value, quality and source timestamp
  * included); writes go through `engine.write()` down to the driver layer.
@@ -147,11 +153,31 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
   const addressSpace = server.engine.addressSpace!;
   const namespace = addressSpace.getOwnNamespace();
   const tagVariables = new Map<string, UAVariable>();
-  let devicesRoot: UAObject | undefined;
+  let channelRoots: UAObject[] = [];
+
+  /** Per-device read/write counters, exposed under <device>/_Statistics. */
+  interface DeviceStats {
+    successfulReads: number;
+    failedReads: number;
+    successfulWrites: number;
+    failedWrites: number;
+  }
+  const deviceStats = new Map<string, DeviceStats>();
+  function statsFor(deviceId: string): DeviceStats {
+    let s = deviceStats.get(deviceId);
+    if (!s) {
+      s = { successfulReads: 0, failedReads: 0, successfulWrites: 0, failedWrites: 0 };
+      deviceStats.set(deviceId, s);
+    }
+    return s;
+  }
 
   function tagDataValue(tag: TagConfig): DataValue {
     const current = engine.getValue(tag.id);
     const dataType = OPCUA_DATA_TYPE[tag.dataType];
+    const stats = statsFor(tag.deviceId);
+    if (current?.quality === "bad") stats.failedReads++;
+    else stats.successfulReads++;
     return new DataValue({
       value: new Variant({
         dataType,
@@ -162,58 +188,175 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
     });
   }
 
+  function addConstVariable(
+    parent: UAObject,
+    pathPrefix: string,
+    name: string,
+    dataTypeName: string,
+    dataType: DataType,
+    get: () => TagPrimitive,
+  ): void {
+    namespace.addVariable({
+      componentOf: parent,
+      browseName: name,
+      nodeId: `s=${pathPrefix}.${name}`,
+      dataType: dataTypeName,
+      accessLevel: AccessLevelFlag.CurrentRead,
+      userAccessLevel: AccessLevelFlag.CurrentRead,
+      minimumSamplingInterval: 250,
+      value: {
+        timestamped_get: () =>
+          new DataValue({
+            value: new Variant({ dataType, value: get() }),
+            statusCode: StatusCodes.Good,
+            sourceTimestamp: new Date(),
+          }),
+      },
+    });
+  }
+
+  /** Per-device _System object. */
+  function addDeviceSystemNodes(
+    deviceNode: UAObject,
+    devicePath: string,
+    device: DeviceConfig,
+    deviceTags: TagConfig[],
+  ): void {
+    const systemNode = namespace.addObject({
+      organizedBy: deviceNode,
+      browseName: "_System",
+      nodeId: `s=${devicePath}._System`,
+    });
+    const prefix = `${devicePath}._System`;
+
+    const enabledVar = namespace.addVariable({
+      componentOf: systemNode,
+      browseName: "_Enabled",
+      nodeId: `s=${prefix}._Enabled`,
+      description: "Enable or disable communication with the device.",
+      dataType: "Boolean",
+      accessLevel: AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite,
+      userAccessLevel: AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite,
+      minimumSamplingInterval: 250,
+      value: {
+        timestamped_get: () =>
+          new DataValue({
+            value: new Variant({ dataType: DataType.Boolean, value: device.enabled }),
+            statusCode: StatusCodes.Good,
+            sourceTimestamp: new Date(),
+          }),
+        timestamped_set: (dataValue: DataValue, callback: (err: Error | null, statusCode: StatusCode) => void) => {
+          try {
+            store.upsertDevice({ ...device, enabled: Boolean(dataValue.value.value) });
+            callback(null, StatusCodes.Good);
+          } catch {
+            callback(null, StatusCodes.BadNotWritable);
+          }
+        },
+      },
+    });
+    enabledVar.setValueFromSource(
+      new Variant({ dataType: DataType.Boolean, value: device.enabled }),
+      StatusCodes.Good,
+    );
+
+    addConstVariable(systemNode, prefix, "_Error", "String", DataType.String, () => {
+      const failing = deviceTags.find((t) => engine.getValue(t.id)?.error);
+      return failing ? (engine.getValue(failing.id)?.error ?? "") : "";
+    });
+    addConstVariable(
+      systemNode,
+      prefix,
+      "_Description",
+      "String",
+      DataType.String,
+      () => (typeof device.settings.description === "string" ? device.settings.description : ""),
+    );
+  }
+
+  /** Per-device _Statistics object. */
+  function addDeviceStatisticsNodes(deviceNode: UAObject, devicePath: string, deviceId: string): void {
+    const statsNode = namespace.addObject({
+      organizedBy: deviceNode,
+      browseName: "_Statistics",
+      nodeId: `s=${devicePath}._Statistics`,
+    });
+    const prefix = `${devicePath}._Statistics`;
+    const counters: Array<[name: string, get: (s: DeviceStats) => number]> = [
+      ["_SuccessfulReads", (s) => s.successfulReads],
+      ["_FailedReads", (s) => s.failedReads],
+      ["_SuccessfulWrites", (s) => s.successfulWrites],
+      ["_FailedWrites", (s) => s.failedWrites],
+    ];
+    for (const [name, get] of counters) {
+      addConstVariable(statsNode, prefix, name, "UInt32", DataType.UInt32, () => get(statsFor(deviceId)));
+    }
+  }
+
   function buildAddressSpace(): void {
     tagVariables.clear();
-    devicesRoot = namespace.addFolder(addressSpace.rootFolder.objects, {
-      browseName: "Devices",
-      nodeId: "s=Devices",
-    });
+    channelRoots = [];
     const tagsByDevice = new Map<string, TagConfig[]>();
     for (const tag of store.listTags()) {
       const list = tagsByDevice.get(tag.deviceId) ?? [];
       list.push(tag);
       tagsByDevice.set(tag.deviceId, list);
     }
-    for (const device of store.listDevices()) {
-      const deviceNode = namespace.addObject({
-        organizedBy: devicesRoot,
-        browseName: device.name,
-        nodeId: `s=device:${device.id}`,
+    for (const channel of store.listChannels()) {
+      const channelPath = channel.name;
+      const channelNode = namespace.addObject({
+        organizedBy: addressSpace.rootFolder.objects,
+        browseName: channel.name,
+        nodeId: `s=${channelPath}`,
       });
-      for (const tag of tagsByDevice.get(device.id) ?? []) {
-        const dataType = OPCUA_DATA_TYPE[tag.dataType];
-        const writable = tag.access === "rw";
-        const variable = namespace.addVariable({
-          componentOf: deviceNode,
-          browseName: tag.name,
-          nodeId: `s=${tag.id}`,
-          description: tag.description,
-          dataType: OPCUA_DATA_TYPE_NAME[tag.dataType],
-          accessLevel: writable
-            ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
-            : AccessLevelFlag.CurrentRead,
-          userAccessLevel: writable
-            ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
-            : AccessLevelFlag.CurrentRead,
-          minimumSamplingInterval: 250,
-          value: {
-            timestamped_get: () => tagDataValue(tag),
-            timestamped_set: (dataValue: DataValue, callback: (err: Error | null, statusCode: StatusCode) => void) => {
-              try {
-                engine.write(tag.id, dataValue.value.value as TagPrimitive);
-                callback(null, StatusCodes.Good);
-              } catch {
-                callback(null, StatusCodes.BadNotWritable);
-              }
-            },
-          },
+      channelRoots.push(channelNode);
+      for (const device of store.listDevices(channel.id)) {
+        const devicePath = `${channelPath}.${device.name}`;
+        const deviceNode = namespace.addObject({
+          organizedBy: channelNode,
+          browseName: device.name,
+          nodeId: `s=${devicePath}`,
         });
-        tagVariables.set(tag.id, variable);
-        // Seed the stored value so its Variant carries the declared
-        // datatype; the write-compatibility check rejects writes against
-        // a Null (uninitialized) variant.
-        const initial = tagDataValue(tag);
-        variable.setValueFromSource(initial.value, initial.statusCode, initial.sourceTimestamp ?? undefined);
+        const deviceTags = tagsByDevice.get(device.id) ?? [];
+        addDeviceSystemNodes(deviceNode, devicePath, device, deviceTags);
+        addDeviceStatisticsNodes(deviceNode, devicePath, device.id);
+        for (const tag of deviceTags) {
+          const dataType = OPCUA_DATA_TYPE[tag.dataType];
+          const writable = tag.access === "rw";
+          const variable = namespace.addVariable({
+            componentOf: deviceNode,
+            browseName: tag.name,
+            nodeId: `s=${devicePath}.${tag.name}`,
+            description: tag.description,
+            dataType: OPCUA_DATA_TYPE_NAME[tag.dataType],
+            accessLevel: writable
+              ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
+              : AccessLevelFlag.CurrentRead,
+            userAccessLevel: writable
+              ? AccessLevelFlag.CurrentRead | AccessLevelFlag.CurrentWrite
+              : AccessLevelFlag.CurrentRead,
+            minimumSamplingInterval: 250,
+            value: {
+              timestamped_get: () => tagDataValue(tag),
+              timestamped_set: (dataValue: DataValue, callback: (err: Error | null, statusCode: StatusCode) => void) => {
+                try {
+                  engine.write(tag.id, dataValue.value.value as TagPrimitive);
+                  statsFor(tag.deviceId).successfulWrites++;
+                  callback(null, StatusCodes.Good);
+                } catch {
+                  statsFor(tag.deviceId).failedWrites++;
+                  callback(null, StatusCodes.BadNotWritable);
+                }
+              },
+            },
+          });
+          tagVariables.set(tag.id, variable);
+          // Seed the stored value so its Variant carries the declared
+          // datatype; the write-compatibility check rejects writes against
+          // a Null (uninitialized) variant.
+          const initial = tagDataValue(tag);
+          variable.setValueFromSource(initial.value, initial.statusCode, initial.sourceTimestamp ?? undefined);
+        }
       }
     }
   }
@@ -236,14 +379,14 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
   };
   engine.on("change", onTagChange);
 
-  // Config edits: rebuild the Devices subtree (debounced; a bulk import
+  // Config edits: rebuild the channel subtrees (debounced; a bulk import
   // emits one change event per entity).
   let rebuildTimer: NodeJS.Timeout | undefined;
   const onConfigChange = () => {
     clearTimeout(rebuildTimer);
     rebuildTimer = setTimeout(() => {
       try {
-        if (devicesRoot) addressSpace.deleteNode(devicesRoot);
+        for (const root of channelRoots) addressSpace.deleteNode(root);
         buildAddressSpace();
       } catch (err) {
         logger?.error({ err }, "OPC UA address space rebuild failed");
