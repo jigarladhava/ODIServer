@@ -1,7 +1,8 @@
 import express, { type Express, type Request, type Response } from "express";
 import type { Server as HttpServer } from "node:http";
-import type { ConfigStore, TagEngine } from "@odiserver/core";
+import type { ConfigStore, EventLog, TagEngine } from "@odiserver/core";
 import { entityRoutes, valueRoutes } from "./routes.js";
+import { eventRoutes } from "./event-routes.js";
 import { deviceTransferRoutes, projectTransferRoutes, tagTransferRoutes } from "./transfer-routes.js";
 import { importerRoutes } from "./import-routes.js";
 import type { ImporterPlugin } from "./importers.js";
@@ -20,6 +21,8 @@ export interface ApiOptions {
   mqtt?: MqttStatusProvider;
   /** Importer plugins discovered at runtime (optional; enables /api/plugins/importers). */
   importers?: ImporterPlugin[];
+  /** Server event log (optional; enables /api/events). */
+  events?: EventLog;
 }
 
 /** Build the ODIServer Express app (REST + static web console). */
@@ -62,6 +65,7 @@ export function createApiApp(options: ApiOptions): Express {
   app.use("/api/tags", entityRoutes("tag", store));
   app.use("/api/mqtt-agents", mqttAgentRoutes(store, options.mqtt));
   app.use("/api/values", valueRoutes(engine));
+  if (options.events) app.use("/api/events", eventRoutes(options.events));
 
   if (webDistDir) {
     app.use(express.static(webDistDir));

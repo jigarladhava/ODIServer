@@ -9,6 +9,7 @@ import { DATA_TYPE_LABELS } from '../lib/labels';
 import { BreadcrumbBar } from '../components/BreadcrumbBar';
 import { DataGrid } from '../components/DataGrid';
 import { EntityInspector } from '../components/EntityInspector';
+import { EventLogView } from '../components/EventLogView';
 import { PropertyInspector, type PropertyEntry } from '../components/PropertyInspector';
 import { QualityBadge } from '../components/QualityBadge';
 import { Tabs } from '../components/Tabs';
@@ -184,17 +185,6 @@ const tagColumns: ColumnDef<Tag, any>[] = [
     cell: ({ row }) => <LiveTimestampCell tagId={row.original.id} />,
   },
 ];
-
-function NoEventLogBackend() {
-  return (
-    <div className="flex h-full items-center justify-center bg-inset p-6">
-      <p className="max-w-md text-center text-[12px] text-muted">
-        No event log backend yet. This view will show server events once the runtime exposes an
-        event log endpoint.
-      </p>
-    </div>
-  );
-}
 
 export function ConnectivityPage() {
   const { project, refresh } = useProject();
@@ -431,7 +421,7 @@ export function ConnectivityPage() {
         <section className="flex min-w-0 flex-1 flex-col bg-inset">
           {selection.kind === 'eventlog' ? (
             <div className="min-h-0 flex-1">
-              <NoEventLogBackend />
+              <EventLogView />
             </div>
           ) : (
             <>
@@ -447,7 +437,7 @@ export function ConnectivityPage() {
               />
               <div className="min-h-0 flex-1">
                 {activeTab === 'log' ? (
-                  <NoEventLogBackend />
+                  <EventLogView />
                 ) : activeTab === 'properties' ? (
                   inspector
                 ) : (

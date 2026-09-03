@@ -1,5 +1,5 @@
 import type { Logger } from "pino";
-import type { ConfigStore, TagEngine } from "@odiserver/core";
+import type { ConfigStore, EventLog, TagEngine } from "@odiserver/core";
 import {
   MqttAgentRuntime,
   type MqttAgentStatus,
@@ -20,6 +20,8 @@ export interface MqttManagerOptions {
   connectFn?: MqttConnectFn;
   /** Base directory for resolving relative TLS certificate paths. */
   dataDir?: string;
+  /** Server event log; agent lifecycle and broker state changes are recorded. */
+  events?: EventLog;
 }
 
 export interface MqttAgentManager {
@@ -30,7 +32,7 @@ export interface MqttAgentManager {
 const RECONCILE_DEBOUNCE_MS = 250;
 
 export function startMqttAgents(options: MqttManagerOptions): MqttAgentManager {
-  const { engine, store, logger, connectFn, dataDir } = options;
+  const { engine, store, logger, connectFn, dataDir, events } = options;
   const runtimes = new Map<string, { fingerprint: string; runtime: MqttAgentRuntime }>();
 
   const reconcile = (): void => {
@@ -50,15 +52,17 @@ export function startMqttAgents(options: MqttManagerOptions): MqttAgentManager {
       existing?.runtime.stop();
       runtimes.set(agent.id, {
         fingerprint,
-        runtime: new MqttAgentRuntime({ agent, engine, store, logger, connectFn, dataDir }),
+        runtime: new MqttAgentRuntime({ agent, engine, store, logger, connectFn, dataDir, events }),
       });
       logger?.info({ agent: agent.id, url: agent.url }, "MQTT agent started");
+      events?.info("mqtt", `MQTT agent "${agent.name}" started (${agent.url})`);
     }
     for (const [id, entry] of runtimes) {
       if (!seen.has(id)) {
         entry.runtime.stop();
         runtimes.delete(id);
         logger?.info({ agent: id }, "MQTT agent stopped");
+        events?.info("mqtt", `MQTT agent ${id} stopped`);
       }
     }
   };

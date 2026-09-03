@@ -11,6 +11,7 @@ import type {
   MqttAgent,
   MqttAgentStatus,
   Project,
+  ServerEvent,
   ServerStatus,
   ValueChange,
   ValueMap,
@@ -60,6 +61,20 @@ export function getStatus(): Promise<ServerStatus> {
 
 export function getValues(): Promise<ValueMap> {
   return request<ValueMap>('/values');
+}
+
+// ---------------------------------------------------------------------------
+// Server event log
+// ---------------------------------------------------------------------------
+
+export interface EventQuery {
+  limit?: number;
+}
+
+/** Fetch buffered server events in chronological order (oldest first). */
+export function getEvents(query: EventQuery = {}): Promise<ServerEvent[]> {
+  const qs = query.limit !== undefined ? `?limit=${query.limit}` : '';
+  return request<ServerEvent[]>(`/events${qs}`);
 }
 
 export function createEntity<T>(kind: EntityKind, config: unknown): Promise<T> {
@@ -227,6 +242,7 @@ export function downloadTags(deviceId: string, format: 'csv' | 'json' = 'csv'): 
 export interface ValuesHandlers {
   onSnapshot?: (data: ValueMap) => void;
   onChange?: (change: ValueChange) => void;
+  onEvent?: (event: ServerEvent) => void;
   onStateChange?: (connected: boolean) => void;
 }
 
@@ -252,9 +268,11 @@ export function subscribeValues(handlers: ValuesHandlers): () => void {
       try {
         const msg = JSON.parse(String(event.data)) as
           | { type: 'snapshot'; data: ValueMap }
-          | { type: 'change'; data: ValueChange };
+          | { type: 'change'; data: ValueChange }
+          | { type: 'event'; data: ServerEvent };
         if (msg.type === 'snapshot') handlers.onSnapshot?.(msg.data);
         else if (msg.type === 'change') handlers.onChange?.(msg.data);
+        else if (msg.type === 'event') handlers.onEvent?.(msg.data);
       } catch {
         // ignore malformed frames
       }

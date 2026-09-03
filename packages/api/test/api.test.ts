@@ -1,18 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ConfigStore, TagEngine } from "@odiserver/core";
+import { ConfigStore, EventLog, TagEngine } from "@odiserver/core";
 import { createApiApp } from "../src/index.js";
 
 let server: Server;
 let base: string;
 let store: ConfigStore;
 let engine: TagEngine;
+let events: EventLog;
 
 beforeAll(async () => {
   store = new ConfigStore(":memory:");
   engine = new TagEngine();
-  const app = createApiApp({ store, engine, startedAt: Date.now() });
+  events = new EventLog();
+  const app = createApiApp({ store, engine, startedAt: Date.now(), events });
   server = createServer(app);
   await new Promise<void>((res) => server.listen(0, "127.0.0.1", res));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -80,5 +82,31 @@ describe("ODIServer REST API", () => {
     };
     expect(status.status).toBe("running");
     expect(status.counts).toEqual({ channels: 1, devices: 1, tags: 1 });
+  });
+
+  it("serves the event log with filters", async () => {
+    events.info("server", "started");
+    events.warning("mqtt", "connection lost");
+    events.error("mqtt", "broker unreachable");
+
+    const all = (await (await fetch(`${base}/api/events`)).json()) as { message: string }[];
+    expect(all.map((e) => e.message)).toEqual([
+      "started",
+      "connection lost",
+      "broker unreachable",
+    ]);
+
+    const filtered = (await (
+      await fetch(`${base}/api/events?severity=error&source=mqtt`)
+    ).json()) as { message: string }[];
+    expect(filtered.map((e) => e.message)).toEqual(["broker unreachable"]);
+
+    const limited = (await (
+      await fetch(`${base}/api/events?limit=2`)
+    ).json()) as { message: string }[];
+    expect(limited.map((e) => e.message)).toEqual(["connection lost", "broker unreachable"]);
+
+    const badSeverity = await fetch(`${base}/api/events?severity=nope`);
+    expect(badSeverity.status).toBe(400);
   });
 });

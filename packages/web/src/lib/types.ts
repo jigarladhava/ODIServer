@@ -151,3 +151,16 @@ export interface ServerStatus {
   uptimeMs: number;
   counts: { channels: number; devices: number; tags: number };
 }
+
+export type EventSeverity = 'info' | 'warning' | 'error';
+
+export interface ServerEvent {
+  /** Monotonic id assigned by the server log (larger = newer). */
+  id: number;
+  /** Unix epoch milliseconds. */
+  timestamp: number;
+  severity: EventSeverity;
+  /** Originating subsystem, e.g. "server", "config", "device", "mqtt", "opcua". */
+  source: string;
+  message: string;
+}

@@ -4,6 +4,7 @@ import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import type { Logger } from "pino";
 import type {
   ConfigStore,
+  EventLog,
   MqttAgentConfig,
   Quality,
   TagConfig,
@@ -49,6 +50,8 @@ export interface MqttAgentRuntimeOptions {
   connectFn?: MqttConnectFn;
   /** Base directory for resolving relative TLS certificate paths. */
   dataDir?: string;
+  /** Server event log; broker connect/loss/error transitions are recorded. */
+  events?: EventLog;
 }
 
 export interface MqttAgentStatus {
@@ -75,6 +78,7 @@ export class MqttAgentRuntime {
   private readonly engine: TagEngine;
   private readonly store: ConfigStore;
   private readonly logger?: Logger;
+  private readonly events?: EventLog;
 
   private client?: MqttClientLike;
   /** Last published value/quality per tag — the agent-side deadband reference. */
@@ -88,12 +92,20 @@ export class MqttAgentRuntime {
   private lastError: string | undefined;
   private publishedCount = 0;
   private lastPublishAt: number | undefined;
+  /** Last error text sent to the event log — suppresses reconnect spam. */
+  private lastLoggedError: string | undefined;
+  /** Distinguishes a first connect from a reconnect for event wording. */
+  private hasConnectedBefore = false;
+  /** Throttles connect/loss event messages while a broker flaps. */
+  private lastConnEventAt = 0;
+  private static readonly CONN_EVENT_MIN_INTERVAL_MS = 10_000;
 
   constructor(options: MqttAgentRuntimeOptions) {
     this.agent = options.agent;
     this.engine = options.engine;
     this.store = options.store;
     this.logger = options.logger;
+    this.events = options.events;
 
     if (!this.agent.enabled) {
       this.statusState = "disabled";
@@ -107,23 +119,46 @@ export class MqttAgentRuntime {
       this.statusState = "error";
       this.lastError = err instanceof Error ? err.message : String(err);
       this.logger?.error({ err, agent: this.agent.id }, "MQTT agent connect failed");
+      this.events?.error("mqtt", `MQTT agent "${this.agent.name}" connect failed: ${this.lastError}`);
       return;
     }
 
     this.client.on("connect", () => {
+      const reconnect = this.hasConnectedBefore;
+      this.hasConnectedBefore = true;
       this.statusState = "connected";
       this.lastError = undefined;
+      this.lastLoggedError = undefined;
+      this.logConnEvent(() =>
+        this.events?.info(
+          "mqtt",
+          reconnect
+            ? `MQTT agent "${this.agent.name}" reconnected to broker`
+            : `MQTT agent "${this.agent.name}" connected to broker`,
+        ),
+      );
       this.publishBirth();
       this.publishSnapshot();
       this.refreshTimers();
     });
     this.client.on("close", () => {
-      if (!this.ended) this.statusState = "connecting";
+      if (!this.ended) {
+        if (this.statusState === "connected") {
+          this.logConnEvent(() =>
+            this.events?.warning("mqtt", `MQTT agent "${this.agent.name}" lost broker connection`),
+          );
+        }
+        this.statusState = "connecting";
+      }
     });
     this.client.on("error", (err: unknown) => {
       // mqtt.js keeps reconnecting after an error; record it but stay alive.
       this.lastError = err instanceof Error ? err.message : String(err);
       if (this.statusState !== "connected") this.statusState = "error";
+      if (this.lastError !== this.lastLoggedError) {
+        this.lastLoggedError = this.lastError;
+        this.events?.error("mqtt", `MQTT agent "${this.agent.name}" broker error: ${this.lastError}`);
+      }
     });
 
     this.engine.on("change", this.onTagChange);
@@ -137,6 +172,14 @@ export class MqttAgentRuntime {
       publishedCount: this.publishedCount,
       lastPublishAt: this.lastPublishAt,
     };
+  }
+
+  /** Emit a connection-state event at most once per throttle window. */
+  private logConnEvent(log: () => void): void {
+    const now = Date.now();
+    if (now - this.lastConnEventAt < MqttAgentRuntime.CONN_EVENT_MIN_INTERVAL_MS) return;
+    this.lastConnEventAt = now;
+    log();
   }
 
   stop(): void {
