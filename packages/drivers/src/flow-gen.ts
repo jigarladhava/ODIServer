@@ -449,6 +449,138 @@ function deviceStatusNodes(device: DeviceConfig): NodeRedNode[] {
   ];
 }
 
+/* ------------------------------------------------------------------ *
+ * OPC UA client driver (node-red-contrib-opcua)
+ *
+ * Per opcua-client channel:
+ *   odi-opcua-sub ──> OpcUa-Client ──(values)──> odi-opcua-in
+ *   odi-opcua-out ──>      │       ──(errors)──>      │
+ *                    status(client) ────────────>     │
+ *
+ * odi-opcua-sub emits one subscribe msg per tag ({ topic: nodeId,
+ * interval: scanRateMs }); the client node queues them while connecting
+ * and auto-resubscribes after reconnects. odi-opcua-in routes inbound
+ * msgs to the tag engine by nodeId. odi-opcua-out forwards engine writes
+ * as typed write msgs ({ topic: "<nodeId>;datatype=<T>", action:"write" }).
+ *
+ * Channel settings:
+ *   endpointUrl     opc.tcp://host:port (default opc.tcp://127.0.0.1:49320)
+ *   securityPolicy  None | Basic128Rsa15 | Basic256 | Basic256Sha256
+ *   securityMode    None | Sign | SignAndEncrypt
+ *   publishIntervalMs  subscription publishing interval (default 500)
+ * ------------------------------------------------------------------ */
+
+function opcuaEndpointNodeId(channelId: string): string {
+  return `odi-opcua-ep-${channelId}`;
+}
+function opcuaClientNodeId(channelId: string): string {
+  return `odi-opcua-client-${channelId}`;
+}
+function opcuaSubNodeId(channelId: string): string {
+  return `odi-opcua-sub-${channelId}`;
+}
+function opcuaInNodeId(channelId: string): string {
+  return `odi-opcua-in-${channelId}`;
+}
+function opcuaOutNodeId(channelId: string): string {
+  return `odi-opcua-out-${channelId}`;
+}
+function opcuaStatusNodeId(channelId: string): string {
+  return `odi-opcua-status-${channelId}`;
+}
+
+function isOpcUaAddress(address: string): boolean {
+  return /^ns=\d+;[isgb]=/i.test(address.trim());
+}
+
+function opcuaChannelNodes(
+  channel: ProjectConfig["channels"][number],
+  hasWritableTags: boolean,
+): NodeRedNode[] {
+  const s = channel.settings as {
+    endpointUrl?: string;
+    securityPolicy?: string;
+    securityMode?: string;
+    publishIntervalMs?: number;
+  };
+  const endpointId = opcuaEndpointNodeId(channel.id);
+  const clientId = opcuaClientNodeId(channel.id);
+  const inId = opcuaInNodeId(channel.id);
+
+  const publish =
+    typeof s.publishIntervalMs === "number" && s.publishIntervalMs >= 100 ? s.publishIntervalMs : 500;
+
+  const nodes: NodeRedNode[] = [
+    {
+      id: endpointId,
+      type: "OpcUa-Endpoint",
+      z: ODI_TAB_ID,
+      name: `${channel.name} endpoint`,
+      endpoint: s.endpointUrl ?? "opc.tcp://127.0.0.1:49320",
+      secpol: s.securityPolicy ?? "None",
+      secmode: s.securityMode ?? "None",
+      login: false,
+      none: true,
+      usercert: false,
+      usercertificate: "",
+      userprivatekey: "",
+    },
+    {
+      id: clientId,
+      type: "OpcUa-Client",
+      z: ODI_TAB_ID,
+      name: channel.name,
+      endpoint: endpointId,
+      action: "subscribe",
+      time: String(publish),
+      timeUnit: "ms",
+      certificate: "n",
+      localfile: "",
+      localkeyfile: "",
+      useTransport: false,
+      keepsessionalive: true,
+      wires: [[inId], [inId], []],
+    },
+    {
+      id: opcuaSubNodeId(channel.id),
+      type: "odi-opcua-sub",
+      z: ODI_TAB_ID,
+      name: `sub:${channel.name}`,
+      channelId: channel.id,
+      wires: [[clientId]],
+    },
+    {
+      id: inId,
+      type: "odi-opcua-in",
+      z: ODI_TAB_ID,
+      name: `in:${channel.name}`,
+      channelId: channel.id,
+      wires: [],
+    },
+    {
+      id: opcuaStatusNodeId(channel.id),
+      type: "status",
+      z: ODI_TAB_ID,
+      name: `link:${channel.name}`,
+      scope: [clientId],
+      wires: [[inId]],
+    },
+  ];
+
+  if (hasWritableTags) {
+    nodes.push({
+      id: opcuaOutNodeId(channel.id),
+      type: "odi-opcua-out",
+      z: ODI_TAB_ID,
+      name: `out:${channel.name}`,
+      channelId: channel.id,
+      wires: [[clientId]],
+    });
+  }
+  return nodes;
+}
+
+
 /**
  * Generate the full Node-RED flow set for the current project config.
  * Only enabled channels/devices/tags produce nodes. Unknown or invalid
@@ -469,7 +601,7 @@ export function generateFlows(project: ProjectConfig): NodeRedNode[] {
     if (!device.enabled) continue;
     const channel = channelById.get(device.channelId);
     if (!channel || !channel.enabled) continue;
-    if (!isModbusTcp(device, channel.driver)) continue; // modbus-rtu / opcua-client: later phases
+    if (!isModbusTcp(device, channel.driver)) continue; // modbus-rtu: later phase; opcua-client handled below
 
     const tags = (tagsByDevice.get(device.id) ?? []).filter((t) => {
       try {
@@ -502,6 +634,17 @@ export function generateFlows(project: ProjectConfig): NodeRedNode[] {
         nodes.push(...modbusBlockReadNodes(block, device));
       }
     }
+  }
+
+  // OPC UA client channels: one endpoint + client per channel; the odi-opcua-*
+  // bridge nodes handle subscription, inbound routing and writes per channel.
+  for (const channel of project.channels) {
+    if (!channel.enabled || channel.driver !== "opcua-client") continue;
+    const devices = project.devices.filter((d) => d.channelId === channel.id && d.enabled);
+    const tags = devices.flatMap((d) => tagsByDevice.get(d.id) ?? []);
+    const valid = tags.filter((t) => isOpcUaAddress(t.address));
+    if (valid.length === 0) continue;
+    nodes.push(...opcuaChannelNodes(channel, valid.some((t) => t.access === "rw")));
   }
 
   return nodes;

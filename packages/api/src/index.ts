@@ -29,7 +29,9 @@ export interface ApiOptions {
 export function createApiApp(options: ApiOptions): Express {
   const { store, engine, webDistDir } = options;
   const app = express();
-  app.use(express.json());
+  // Full-project imports of converted Kepware projects run to several MB
+  // (13k+ tags), well past the 100kb default — give JSON bodies headroom.
+  app.use(express.json({ limit: "30mb" }));
   // Tag CSV import posts a text/csv body. Skip the project importer path —
   // it mounts its own text parser with a larger limit (see import-routes.ts).
   const csvTextParser = express.text({ type: ["text/csv", "text/plain"], limit: "5mb" });

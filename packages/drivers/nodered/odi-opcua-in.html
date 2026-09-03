@@ -1,0 +1,33 @@
+<script type="text/javascript">
+  RED.nodes.registerType('odi-opcua-in', {
+    category: 'ODIServer',
+    color: '#2d6a7c',
+    defaults: {
+      name: { value: '' },
+      channelId: { value: '' }
+    },
+    inputs: 1,
+    outputs: 0,
+    icon: 'bridge.svg',
+    label: function () {
+      return this.name || 'odi-opcua-in ' + (this.channelId || '')
+    }
+  })
+</script>
+
+<script type="text/html" data-template-name="odi-opcua-in">
+  <div class="form-row">
+    <label for="node-input-name"><i class="fa fa-tag"></i> Name</label>
+    <input type="text" id="node-input-name" placeholder="Name">
+  </div>
+  <div class="form-row">
+    <label for="node-input-channelId"><i class="fa fa-tag"></i> Channel ID</label>
+    <input type="text" id="node-input-channelId" placeholder="channel id">
+  </div>
+</script>
+
+<script type="text/html" data-help-name="odi-opcua-in">
+  <p>Routes OpcUa-Client subscription messages into the ODIServer tag engine,
+  mapping msg.topic (nodeId) to the channel's tag addresses. Endpoint errors
+  and connection-loss status texts mark the channel's tags bad.</p>
+</script>

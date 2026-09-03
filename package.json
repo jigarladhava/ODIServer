@@ -16,6 +16,7 @@
     "dev": "npm run dev -w @odiserver/server",
     "test": "npm run test --workspaces --if-present",
     "test:e2e": "tsx scripts/e2e-modbus.ts",
+    "test:e2e:opcua": "tsx scripts/e2e-opcua.ts",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {

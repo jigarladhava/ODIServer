@@ -9,7 +9,10 @@
     "version": ">=3.0.0",
     "nodes": {
       "odi-tag-in": "odi-tag-in.js",
-      "odi-tag-out": "odi-tag-out.js"
+      "odi-tag-out": "odi-tag-out.js",
+      "odi-opcua-sub": "odi-opcua-sub.js",
+      "odi-opcua-in": "odi-opcua-in.js",
+      "odi-opcua-out": "odi-opcua-out.js"
     }
   }
 }

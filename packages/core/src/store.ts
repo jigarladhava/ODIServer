@@ -35,6 +35,9 @@ export class ConfigStore extends EventEmitter {
 
   constructor(dbPath: string) {
     super();
+    // Bridge nodes (odi-opcua-in/out per channel) subscribe to config
+    // changes to invalidate their indexes — hundreds of listeners are normal.
+    this.setMaxListeners(0);
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.migrate();

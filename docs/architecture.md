@@ -102,5 +102,5 @@ MQTT agents).
 3. **Phase 2** — OPC UA server northbound (address space, write-back, certs, security)
 4. **Phase 3** — MQTT publish agents (done: brokers, topic patterns, payload templates, timing modes, deadbands, per-tag overrides); Sparkplug B EoN profile next (birth/death, aliases, DCMD write-back)
 5. **Phase 4** — web console wired to live API (CRUD wizards, live monitor, event log)
-6. **Phase 5** — OPC UA client driver
+6. **Phase 5** — OPC UA client driver (done: subscription-based opcua-client channels via node-red-contrib-opcua, Kepware-style `ns=2;s=Channel.Device.Tag` addressing, write-back; see `scripts/e2e-opcua.ts`)
 7. **Phase 6** — cross-platform packaging: systemd, Windows Service, launchd, multi-arch Docker, CI matrix

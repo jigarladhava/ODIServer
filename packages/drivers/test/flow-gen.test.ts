@@ -317,3 +317,69 @@ describe("block reads", () => {
     expect(reads[0]).toMatchObject({ dataType: "Coil", adr: "0", quantity: "9" });
   });
 });
+
+function opcuaProject(tagAccess: "ro" | "rw" = "ro"): ProjectConfig {
+  return {
+    channels: [
+      {
+        id: "kep1",
+        name: "Site A",
+        driver: "opcua-client",
+        enabled: true,
+        settings: { endpointUrl: "opc.tcp://127.0.0.1:49320" },
+      },
+      { id: "kep2", name: "Disabled", driver: "opcua-client", enabled: false, settings: {} },
+    ],
+    devices: [
+      { id: "kep1.dev1", channelId: "kep1", name: "PLC-01", enabled: true, settings: {} },
+      { id: "kep2.dev1", channelId: "kep2", name: "PLC-02", enabled: true, settings: {} },
+    ],
+    tags: [
+      { id: "kep1.dev1.t1", deviceId: "kep1.dev1", name: "Voltage", address: "ns=2;s=Site A.PLC-01.Voltage", dataType: "float32", byteOrder: "big-endian", access: tagAccess, scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+      { id: "kep1.dev1.bad", deviceId: "kep1.dev1", name: "NotOpcUa", address: "40001", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+      { id: "kep2.dev1.t1", deviceId: "kep2.dev1", name: "OnDisabledChannel", address: "ns=2;s=Disabled.PLC-02.X", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+    ],
+    mqttAgents: [],
+  };
+}
+
+describe("opcua-client channels", () => {
+  it("creates endpoint + client + bridges per enabled channel with valid tags", () => {
+    const flows = generateFlows(opcuaProject());
+    const endpoint = flows.find((n) => n.type === "OpcUa-Endpoint")!;
+    expect(endpoint).toMatchObject({ id: "odi-opcua-ep-kep1", endpoint: "opc.tcp://127.0.0.1:49320", secpol: "None", secmode: "None" });
+    const client = flows.find((n) => n.type === "OpcUa-Client")!;
+    expect(client).toMatchObject({ id: "odi-opcua-client-kep1", endpoint: "odi-opcua-ep-kep1", action: "subscribe" });
+    expect(flows.find((n) => n.id === "odi-opcua-sub-kep1")).toMatchObject({ type: "odi-opcua-sub", channelId: "kep1", wires: [["odi-opcua-client-kep1"]] });
+    expect(flows.find((n) => n.id === "odi-opcua-in-kep1")).toMatchObject({ type: "odi-opcua-in", channelId: "kep1" });
+    expect(client.wires).toEqual([["odi-opcua-in-kep1"], ["odi-opcua-in-kep1"], []]);
+    // only one channel has valid tags (kep2 disabled; kep1 also has a non-OPC address tag)
+    expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(1);
+  });
+
+  it("watches the client node status for connection loss", () => {
+    const flows = generateFlows(opcuaProject());
+    expect(flows.find((n) => n.id === "odi-opcua-status-kep1")).toMatchObject({
+      type: "status",
+      scope: ["odi-opcua-client-kep1"],
+      wires: [["odi-opcua-in-kep1"]],
+    });
+  });
+
+  it("adds the write bridge only when the channel has rw tags", () => {
+    expect(generateFlows(opcuaProject("ro")).filter((n) => n.type === "odi-opcua-out")).toHaveLength(0);
+    const rw = generateFlows(opcuaProject("rw"));
+    expect(rw.find((n) => n.id === "odi-opcua-out-kep1")).toMatchObject({
+      type: "odi-opcua-out",
+      channelId: "kep1",
+      wires: [["odi-opcua-client-kep1"]],
+    });
+  });
+
+  it("generates nothing for opcua channels without valid ns= addresses", () => {
+    const p = opcuaProject();
+    p.tags = p.tags.filter((t) => !t.address.startsWith("ns="));
+    const flows = generateFlows(p);
+    expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(0);
+  });
+});
