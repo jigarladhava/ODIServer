@@ -30,3 +30,5 @@ packages/server/test/tmp/
 Thumbs.db
 .idea/
 .vscode/
+
+strix_runs
