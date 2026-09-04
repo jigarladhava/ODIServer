@@ -1,8 +1,11 @@
-import { useState } from 'react';
-import { Navigate, Route, Routes, useSearchParams } from 'react-router-dom';
-import { downloadDevice, downloadProject, downloadTags, importProject, type ImportResult } from './lib/api-client';
+import { useEffect, useState } from 'react';
+import { Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
+import { createEntity, downloadDevice, downloadProject, downloadTags, importProject, type ImportResult } from './lib/api-client';
+import { useDirtyGuard } from './lib/dirty';
 import { useProject } from './lib/project';
-import type { Project } from './lib/types';
+import { useToasts } from './lib/toast';
+import type { Channel, Device, Project, Tag } from './lib/types';
+import { CommandPalette, type PaletteCommand } from './components/CommandPalette';
 import { ConfirmDeleteModal, type DeleteTarget } from './components/ConfirmDeleteModal';
 import { EntityModal, type CreateTarget } from './components/EntityModal';
 import { ImportModal, type ImportTarget } from './components/ImportModal';
@@ -45,11 +48,46 @@ function resolveDeleteTarget(
   return undefined;
 }
 
+/** Snapshot of everything a delete removes — the payload for the Undo toast. */
+interface DeleteSnapshot {
+  channels: Channel[];
+  devices: Device[];
+  tags: Tag[];
+}
+
+function captureDeleteSnapshot(project: Project, target: DeleteTarget): DeleteSnapshot {
+  if (target.kind === 'tag') {
+    return {
+      channels: [],
+      devices: [],
+      tags: project.tags.filter((t) => t.id === target.id),
+    };
+  }
+  if (target.kind === 'device') {
+    return {
+      channels: [],
+      devices: project.devices.filter((d) => d.id === target.id),
+      tags: project.tags.filter((t) => t.deviceId === target.id),
+    };
+  }
+  const devices = project.devices.filter((d) => d.channelId === target.id);
+  const deviceIds = new Set(devices.map((d) => d.id));
+  return {
+    channels: project.channels.filter((c) => c.id === target.id),
+    devices,
+    tags: project.tags.filter((t) => deviceIds.has(t.deviceId)),
+  };
+}
+
 export default function App() {
   const { project, refresh } = useProject();
+  const { push } = useToasts();
+  const { confirmDiscard } = useDirtyGuard();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [deleteSnapshot, setDeleteSnapshot] = useState<DeleteSnapshot | null>(null);
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null);
   const [confirmNewProject, setConfirmNewProject] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
@@ -78,6 +116,30 @@ export default function App() {
 
   const currentDeleteTarget = resolveDeleteTarget(project, nodeId, rowId);
 
+  const openDelete = () => {
+    if (!currentDeleteTarget || !project) return;
+    // Capture the subtree before the modal runs so the Undo toast can restore it.
+    setDeleteSnapshot(captureDeleteSnapshot(project, currentDeleteTarget));
+    setDeleteTarget(currentDeleteTarget);
+  };
+
+  // Delete key deletes the current tree/grid selection (with confirmation).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete') return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) {
+        return;
+      }
+      if (currentDeleteTarget) {
+        e.preventDefault();
+        openDelete();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  });
+
   const runDownload = (download: () => Promise<void>) => {
     download().catch((e) => setActionError(e instanceof Error ? e.message : String(e)));
   };
@@ -87,6 +149,7 @@ export default function App() {
     importProject({ channels: [], devices: [], tags: [] }, 'replace')
       .then(() => {
         setSearchParams({});
+        push({ tone: 'success', message: 'New empty project created.' });
         return refresh();
       })
       .catch((e) => setActionError(e instanceof Error ? e.message : String(e)));
@@ -95,15 +158,44 @@ export default function App() {
   const onCreated = (target: CreateTarget, id: string) => {
     setCreateTarget(null);
     void refresh();
+    push({ tone: 'success', message: `${target.kind} created.` });
     // Select the newly created entity in the tree / grid.
     if (target.kind === 'channel') setSearchParams({ node: `channel:${id}` });
     else if (target.kind === 'device') setSearchParams({ node: `device:${id}` });
     else if (target.parentId) setSearchParams({ node: `device:${target.parentId}`, row: id });
   };
 
+  const undoDelete = (target: DeleteTarget, snapshot: DeleteSnapshot) => {
+    (async () => {
+      try {
+        for (const channel of snapshot.channels) await createEntity('channel', channel);
+        for (const device of snapshot.devices) await createEntity('device', device);
+        for (const tag of snapshot.tags) await createEntity('tag', tag);
+        await refresh();
+        push({ tone: 'success', message: `Restored ${target.kind} "${target.name}".` });
+      } catch (e) {
+        setActionError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+  };
+
   const onDeleted = (target: DeleteTarget) => {
     setDeleteTarget(null);
     void refresh();
+    const snapshot = deleteSnapshot;
+    setDeleteSnapshot(null);
+    const cascaded =
+      snapshot && snapshot.devices.length + snapshot.tags.length > 0
+        ? ` (${snapshot.devices.length} device(s), ${snapshot.tags.length} tag(s))`
+        : '';
+    push({
+      tone: 'info',
+      message: `Deleted ${target.kind} "${target.name}"${cascaded}.`,
+      ...(snapshot && snapshot.channels.length + snapshot.devices.length + snapshot.tags.length > 0
+        ? { action: { label: 'Undo', onClick: () => undoDelete(target, snapshot) } }
+        : {}),
+      durationMs: 10_000,
+    });
     // Move the selection to the deleted entity's parent (or the root).
     if (target.kind === 'tag' && target.parentId) {
       setSearchParams({ node: `device:${target.parentId}` });
@@ -115,6 +207,17 @@ export default function App() {
   };
 
   const onImported = (target: ImportTarget, result: ImportResult) => {
+    const parts: string[] = [];
+    if (result.imported.channels !== undefined) parts.push(`${result.imported.channels} channel(s)`);
+    if (result.imported.devices !== undefined) parts.push(`${result.imported.devices} device(s)`);
+    if (result.imported.tags !== undefined) parts.push(`${result.imported.tags} tag(s)`);
+    const warningCount = result.warnings?.length ?? 0;
+    push({
+      tone: warningCount > 0 ? 'info' : 'success',
+      message: `Import complete: ${parts.join(', ') || 'nothing to import'}${
+        warningCount > 0 ? `, ${warningCount} warning(s)` : ''
+      }.`,
+    });
     void refresh().then(() => {
       if (target.kind === 'project') {
         setSearchParams({});
@@ -123,6 +226,29 @@ export default function App() {
       }
     });
   };
+
+  const paletteCommands: PaletteCommand[] = [
+    { id: 'new-channel', label: 'New Channel', onRun: () => setCreateTarget({ kind: 'channel' }) },
+    ...(newDeviceParentId
+      ? [{ id: 'new-device', label: 'New Device', onRun: () => setCreateTarget({ kind: 'device', parentId: newDeviceParentId }) }]
+      : []),
+    ...(newTagParentId
+      ? [{ id: 'new-tag', label: 'New Tag', onRun: () => setCreateTarget({ kind: 'tag', parentId: newTagParentId }) }]
+      : []),
+    ...(currentDeleteTarget
+      ? [{ id: 'delete', label: `Delete ${currentDeleteTarget.kind} "${currentDeleteTarget.name}"`, onRun: openDelete }]
+      : []),
+    { id: 'open-project', label: 'Open Project (import)', onRun: () => setImportTarget({ kind: 'project' }) },
+    { id: 'save-project', label: 'Save Project (export)', onRun: () => runDownload(downloadProject) },
+    ...(selectedDeviceId
+      ? [{ id: 'export-tags', label: 'Export Tags (CSV)', onRun: () => runDownload(() => downloadTags(selectedDeviceId, 'csv')) }]
+      : []),
+    { id: 'go-connectivity', label: 'Go to Connectivity', onRun: () => navigate('/') },
+    { id: 'go-mqtt', label: 'Go to MQTT', onRun: () => navigate('/mqtt') },
+    { id: 'go-events', label: 'Go to Event Log', onRun: () => navigate('/events') },
+    { id: 'go-diagnostics', label: 'Go to Diagnostics', onRun: () => navigate('/diagnostics') },
+    { id: 'go-settings', label: 'Go to Settings', onRun: () => navigate('/settings') },
+  ];
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas text-fg">
@@ -144,7 +270,7 @@ export default function App() {
             ? () => setCreateTarget({ kind: 'tag', parentId: newTagParentId })
             : undefined
         }
-        onDelete={currentDeleteTarget ? () => setDeleteTarget(currentDeleteTarget) : undefined}
+        onDelete={currentDeleteTarget ? openDelete : undefined}
         onNewProject={() => setConfirmNewProject(true)}
         onOpenProject={() => setImportTarget({ kind: 'project' })}
         onSaveProject={() => runDownload(downloadProject)}
@@ -179,7 +305,7 @@ export default function App() {
             ? () => setCreateTarget({ kind: 'tag', parentId: newTagParentId })
             : undefined
         }
-        onDelete={currentDeleteTarget ? () => setDeleteTarget(currentDeleteTarget) : undefined}
+        onDelete={currentDeleteTarget ? openDelete : undefined}
         deleteLabel={
           currentDeleteTarget
             ? `Delete ${currentDeleteTarget.kind} "${currentDeleteTarget.name}"`
@@ -197,6 +323,13 @@ export default function App() {
         </Routes>
       </main>
       <StatusBar />
+      <CommandPalette
+        commands={paletteCommands.map((cmd) =>
+          cmd.id.startsWith('go-')
+            ? { ...cmd, onRun: () => { if (confirmDiscard()) cmd.onRun(); } }
+            : cmd,
+        )}
+      />
       <EntityModal
         target={createTarget}
         onClose={() => setCreateTarget(null)}
@@ -204,7 +337,10 @@ export default function App() {
       />
       <ConfirmDeleteModal
         target={deleteTarget}
-        onClose={() => setDeleteTarget(null)}
+        onClose={() => {
+          setDeleteTarget(null);
+          setDeleteSnapshot(null);
+        }}
         onDeleted={onDeleted}
       />
       <Modal

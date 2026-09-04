@@ -57,6 +57,8 @@ export function StatusBar() {
         {connected ? 'Live values' : 'Live values: connecting…'}
       </span>
       <span className="ml-auto flex items-center opacity-50">
+        <span className="px-3 font-mono">Ctrl+K</span>
+        <span aria-hidden="true" className="h-3.5 border-l border-border" />
         <span translate="no" className="px-3 font-mono">
           OPC UA: —
         </span>

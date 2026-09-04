@@ -73,6 +73,95 @@ export function normalizeBrokerUrl(url: string): string {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `mqtt://${url}`;
 }
 
+/** Connect options for an agent config, shared by the runtime and the test-connection probe. */
+export function buildMqttConnectOptions(
+  agent: MqttAgentConfig,
+  dataDir?: string,
+  overrides: Partial<IClientOptions> = {},
+): IClientOptions {
+  const options: IClientOptions = {
+    keepalive: agent.keepaliveSec,
+    clean: agent.clean,
+    reconnectPeriod: 5000,
+    connectTimeout: 10_000,
+    ...overrides,
+  };
+  if (agent.clientId) options.clientId = agent.clientId;
+  if (agent.username !== undefined) options.username = agent.username;
+  if (agent.password !== undefined) options.password = agent.password;
+  const url = normalizeBrokerUrl(agent.url);
+  if (url.startsWith("mqtts://") || url.startsWith("wss://")) {
+    options.rejectUnauthorized = agent.tls.rejectUnauthorized;
+    const readPem = (path: string) =>
+      readFileSync(isAbsolute(path) || !dataDir ? path : resolve(dataDir, path));
+    if (agent.tls.caPath) options.ca = readPem(agent.tls.caPath);
+    if (agent.tls.certPath) options.cert = readPem(agent.tls.certPath);
+    if (agent.tls.keyPath) options.key = readPem(agent.tls.keyPath);
+  }
+  if (agent.lwt.enabled && agent.lwt.topic) {
+    options.will = {
+      topic: agent.lwt.topic,
+      payload: agent.lwt.offlinePayload,
+      qos: agent.qos,
+      retain: true,
+    };
+  }
+  return options;
+}
+
+export interface MqttTestResult {
+  ok: boolean;
+  error?: string;
+  latencyMs?: number;
+}
+
+const TEST_TIMEOUT_MS = 10_000;
+
+/**
+ * One-shot broker reachability/auth probe for the console's "Test connection"
+ * button. Opens a throwaway connection, resolves on the first connect or
+ * error, and never publishes anything.
+ */
+export function testMqttConnection(
+  agent: MqttAgentConfig,
+  dataDir?: string,
+  connectFn: MqttConnectFn = defaultConnect,
+): Promise<MqttTestResult> {
+  return new Promise<MqttTestResult>((resolvePromise) => {
+    const started = Date.now();
+    let settled = false;
+    let client: MqttClientLike;
+    const finish = (result: MqttTestResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        client.end(true);
+      } catch {
+        // already gone
+      }
+      resolvePromise(result);
+    };
+    try {
+      client = connectFn(
+        normalizeBrokerUrl(agent.url),
+        buildMqttConnectOptions(agent, dataDir, { reconnectPeriod: 0 }),
+      );
+    } catch (err) {
+      resolvePromise({ ok: false, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    const timer = setTimeout(
+      () => finish({ ok: false, error: `No response from broker within ${TEST_TIMEOUT_MS / 1000}s` }),
+      TEST_TIMEOUT_MS,
+    );
+    client.on("connect", () => finish({ ok: true, latencyMs: Date.now() - started }));
+    client.on("error", (err: unknown) =>
+      finish({ ok: false, error: err instanceof Error ? err.message : String(err) }),
+    );
+  });
+}
+
 export class MqttAgentRuntime {
   private readonly agent: MqttAgentConfig;
   private readonly engine: TagEngine;
@@ -195,34 +284,7 @@ export class MqttAgentRuntime {
   // ---- connection setup ----
 
   private buildConnectOptions(dataDir?: string): IClientOptions {
-    const agent = this.agent;
-    const options: IClientOptions = {
-      keepalive: agent.keepaliveSec,
-      clean: agent.clean,
-      reconnectPeriod: 5000,
-      connectTimeout: 10_000,
-    };
-    if (agent.clientId) options.clientId = agent.clientId;
-    if (agent.username !== undefined) options.username = agent.username;
-    if (agent.password !== undefined) options.password = agent.password;
-    const url = normalizeBrokerUrl(agent.url);
-    if (url.startsWith("mqtts://") || url.startsWith("wss://")) {
-      options.rejectUnauthorized = agent.tls.rejectUnauthorized;
-      const readPem = (path: string) =>
-        readFileSync(isAbsolute(path) || !dataDir ? path : resolve(dataDir, path));
-      if (agent.tls.caPath) options.ca = readPem(agent.tls.caPath);
-      if (agent.tls.certPath) options.cert = readPem(agent.tls.certPath);
-      if (agent.tls.keyPath) options.key = readPem(agent.tls.keyPath);
-    }
-    if (agent.lwt.enabled && agent.lwt.topic) {
-      options.will = {
-        topic: agent.lwt.topic,
-        payload: agent.lwt.offlinePayload,
-        qos: agent.qos,
-        retain: true,
-      };
-    }
-    return options;
+    return buildMqttConnectOptions(this.agent, dataDir);
   }
 
   private publishBirth(): void {

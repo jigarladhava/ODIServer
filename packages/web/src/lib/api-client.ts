@@ -127,6 +127,20 @@ export function getMqttAgentStatus(): Promise<Record<string, MqttAgentStatus>> {
   return request<Record<string, MqttAgentStatus>>('/mqtt-agents/status');
 }
 
+export interface MqttTestResult {
+  ok: boolean;
+  error?: string;
+  latencyMs?: number;
+}
+
+/** One-shot broker reachability/auth probe (does not save the agent). */
+export function testMqttConnection(config: unknown): Promise<MqttTestResult> {
+  return request<MqttTestResult>('/mqtt-agents/test', {
+    method: 'POST',
+    body: JSON.stringify(config),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Import / export (project open/save, device bundles, tag CSV)
 // ---------------------------------------------------------------------------

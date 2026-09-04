@@ -1,8 +1,11 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { getMqttAgents, updateEntity, writeValue } from '../lib/api-client';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { getMqttAgents, updateEntity } from '../lib/api-client';
+import { useDirtyGuard } from '../lib/dirty';
 import { BYTE_ORDER_OPTIONS, DATA_TYPE_LABELS, DATA_TYPE_OPTIONS, isRegisterDataType } from '../lib/labels';
 import { useTagValues } from '../lib/live-values';
 import type { ByteOrder, Channel, DataType, Device, Driver, EntityKind, MqttAgent, MqttTagOverride, Tag, TagAccess } from '../lib/types';
+import { formatValue } from '../lib/format';
+import { WriteValueDialog } from './WriteValueDialog';
 
 interface EntityInspectorProps {
   kind: EntityKind;
@@ -92,6 +95,7 @@ function EditorShell({
   busy,
   error,
   saved,
+  dirty,
   children,
 }: {
   title: string;
@@ -99,12 +103,24 @@ function EditorShell({
   busy: boolean;
   error: string;
   saved: boolean;
+  dirty?: boolean;
   children: ReactNode;
 }) {
+  const { setDirty } = useDirtyGuard();
+  useEffect(() => {
+    setDirty(dirty ?? false);
+    return () => setDirty(false);
+  }, [dirty, setDirty]);
+
   return (
     <section aria-label={title} className="flex h-full flex-col bg-panel">
-      <h2 className="border-b border-border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+      <h2 className="flex items-center gap-2 border-b border-border px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
         {title}
+        {dirty && (
+          <span className="rounded-sm border border-uncertain bg-uncertain-bg px-1.5 py-px font-medium normal-case tracking-normal text-uncertain">
+            Unsaved changes
+          </span>
+        )}
       </h2>
       <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
         <div className="min-h-0 flex-1 overflow-auto">{children}</div>
@@ -155,6 +171,17 @@ function useSave(onSaved: () => void) {
   return { busy, error, saved, save };
 }
 
+/**
+ * Compare the editor's current config against its first-render snapshot (not
+ * the server entity — normalization like `mqtt: {}` vs an absent key would
+ * otherwise report phantom dirtiness).
+ */
+function useInitialJson(currentJson: string): boolean {
+  const initialRef = useRef<string | null>(null);
+  if (initialRef.current === null) initialRef.current = currentJson;
+  return currentJson !== initialRef.current;
+}
+
 function ChannelEditor({ entity, onSaved }: { entity: Channel; onSaved: () => void }) {
   const settings = entity.settings as {
     endpointUrl?: string;
@@ -193,34 +220,39 @@ function ChannelEditor({ entity, onSaved }: { entity: Channel; onSaved: () => vo
 
   const isOpcUa = driver === 'opcua-client';
 
+  const buildConfig = (): Channel => {
+    const nextSettings: Record<string, unknown> = { ...entity.settings };
+    if (isOpcUa) {
+      nextSettings.endpointUrl = endpointUrl.trim();
+      nextSettings.securityPolicy = securityPolicy;
+      nextSettings.securityMode = securityMode;
+      nextSettings.authType = authType;
+      nextSettings.username = authType === 'username' ? username.trim() : undefined;
+      nextSettings.password = authType === 'username' ? password : undefined;
+      nextSettings.userCertificateFile = authType === 'certificate' ? userCertificateFile.trim() : undefined;
+      nextSettings.userPrivateKeyFile = authType === 'certificate' ? userPrivateKeyFile.trim() : undefined;
+      nextSettings.clientCertificateFile = securityMode !== 'None' ? clientCertificateFile.trim() : undefined;
+      nextSettings.clientPrivateKeyFile = securityMode !== 'None' ? clientPrivateKeyFile.trim() : undefined;
+      nextSettings.updateMode = updateMode;
+      nextSettings.keepSessionAlive = keepSessionAlive;
+      nextSettings.applicationName = applicationName.trim() || undefined;
+      nextSettings.publishIntervalMs = Number(publishIntervalMs);
+    }
+    return { ...entity, name: name.trim(), driver, enabled, settings: nextSettings };
+  };
+
+  const dirty = useInitialJson(JSON.stringify(buildConfig()));
+
   return (
     <EditorShell
       title={`Channel — ${entity.name}`}
       busy={busy}
       error={error}
       saved={saved}
+      dirty={dirty}
       onSubmit={(e) => {
         e.preventDefault();
-        const nextSettings: Record<string, unknown> = { ...entity.settings };
-        if (isOpcUa) {
-          nextSettings.endpointUrl = endpointUrl.trim();
-          nextSettings.securityPolicy = securityPolicy;
-          nextSettings.securityMode = securityMode;
-          nextSettings.authType = authType;
-          nextSettings.username = authType === 'username' ? username.trim() : undefined;
-          nextSettings.password = authType === 'username' ? password : undefined;
-          nextSettings.userCertificateFile = authType === 'certificate' ? userCertificateFile.trim() : undefined;
-          nextSettings.userPrivateKeyFile = authType === 'certificate' ? userPrivateKeyFile.trim() : undefined;
-          nextSettings.clientCertificateFile = securityMode !== 'None' ? clientCertificateFile.trim() : undefined;
-          nextSettings.clientPrivateKeyFile = securityMode !== 'None' ? clientPrivateKeyFile.trim() : undefined;
-          nextSettings.updateMode = updateMode;
-          nextSettings.keepSessionAlive = keepSessionAlive;
-          nextSettings.applicationName = applicationName.trim() || undefined;
-          nextSettings.publishIntervalMs = Number(publishIntervalMs);
-        }
-        void save(() =>
-          updateEntity('channel', entity.id, { ...entity, name: name.trim(), driver, enabled, settings: nextSettings }),
-        );
+        void save(() => updateEntity('channel', entity.id, buildConfig()));
       }}
     >
       <IdRow id={entity.id} />
@@ -482,38 +514,38 @@ function DeviceEditor({
   const isTcp = parentDriver === 'modbus-tcp';
   const isRtu = parentDriver === 'modbus-rtu';
 
+  const buildConfig = (): Device => {
+    const nextSettings: Record<string, unknown> = { ...entity.settings };
+    if (isTcp) {
+      nextSettings.host = host.trim();
+      nextSettings.port = Number(port);
+      nextSettings.unitId = Number(unitId);
+    } else if (isRtu) {
+      nextSettings.unitId = Number(unitId);
+    }
+    if (isTcp || isRtu) {
+      nextSettings.blockReads = blockReads;
+      nextSettings.maxBlockSize = Number(maxBlockSize);
+      nextSettings.requestTimeoutMs = Number(requestTimeoutMs);
+      nextSettings.interRequestDelayMs = Number(interRequestDelayMs);
+      nextSettings.scanMode = scanMode;
+      nextSettings.scanModeRateMs = Number(scanModeRateMs);
+    }
+    return { ...entity, name: name.trim(), enabled, settings: nextSettings };
+  };
+
+  const dirty = useInitialJson(JSON.stringify(buildConfig()));
+
   return (
     <EditorShell
       title={`Device — ${entity.name}`}
       busy={busy}
       error={error}
       saved={saved}
+      dirty={dirty}
       onSubmit={(e) => {
         e.preventDefault();
-        const nextSettings: Record<string, unknown> = { ...entity.settings };
-        if (isTcp) {
-          nextSettings.host = host.trim();
-          nextSettings.port = Number(port);
-          nextSettings.unitId = Number(unitId);
-        } else if (isRtu) {
-          nextSettings.unitId = Number(unitId);
-        }
-        if (isTcp || isRtu) {
-          nextSettings.blockReads = blockReads;
-          nextSettings.maxBlockSize = Number(maxBlockSize);
-          nextSettings.requestTimeoutMs = Number(requestTimeoutMs);
-          nextSettings.interRequestDelayMs = Number(interRequestDelayMs);
-          nextSettings.scanMode = scanMode;
-          nextSettings.scanModeRateMs = Number(scanModeRateMs);
-        }
-        void save(() =>
-          updateEntity('device', entity.id, {
-            ...entity,
-            name: name.trim(),
-            enabled,
-            settings: nextSettings,
-          }),
-        );
+        void save(() => updateEntity('device', entity.id, buildConfig()));
       }}
     >
       <IdRow id={entity.id} />
@@ -657,14 +689,6 @@ function DeviceEditor({
       </Row>
     </EditorShell>
   );
-}
-
-function parseWriteValue(raw: string): number | boolean | string {
-  const trimmed = raw.trim();
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (trimmed !== '' && !Number.isNaN(Number(trimmed))) return Number(trimmed);
-  return raw;
 }
 
 /** Form state for one per-agent MQTT override. Empty string = inherit from the agent. */
@@ -928,29 +952,37 @@ function TagEditor({ entity, parentDriver, onSaved }: { entity: Tag; parentDrive
   const patchMqttForm = (agentId: string, patch: Partial<MqttOverrideForm>) =>
     setMqttForms((prev) => ({ ...prev, [agentId]: { ...(prev[agentId] ?? defaultMqttForm()), ...patch } }));
 
-  const [writeRaw, setWriteRaw] = useState('');
-  const [writeNote, setWriteNote] = useState('');
-  const [writeBusy, setWriteBusy] = useState(false);
+  const [writeOpen, setWriteOpen] = useState(false);
 
   const { values } = useTagValues();
   const lastError = values[entity.id]?.error;
+  const liveValue = values[entity.id];
 
-  const onWrite = async () => {
-    if (!writeRaw.trim()) {
-      setWriteNote('Enter a value to write.');
-      return;
-    }
-    setWriteBusy(true);
-    setWriteNote('');
-    try {
-      await writeValue(entity.id, parseWriteValue(writeRaw));
-      setWriteNote('Write queued.');
-    } catch (err) {
-      setWriteNote(err instanceof Error ? err.message : String(err));
-    } finally {
-      setWriteBusy(false);
-    }
-  };
+  const buildConfig = (): Tag => ({
+    ...entity,
+    name: name.trim(),
+    address: address.trim(),
+    dataType,
+    ...(isOpcUa ? {} : isRegisterDataType(dataType) ? { byteOrder } : {}),
+    access,
+    scanRateMs: Number(scanRateMs),
+    deadband: Number(deadband),
+    scaling: {
+      enabled: scalingEnabled,
+      type: scalingType,
+      rawMin: Number(rawMin),
+      rawMax: Number(rawMax),
+      engMin: Number(engMin),
+      engMax: Number(engMax),
+      clampLow,
+      clampHigh,
+      negate,
+    },
+    mqtt: buildMqttOverrides(entity.mqtt, mqttAgents, mqttForms),
+    description: description.trim(),
+  });
+
+  const dirty = useInitialJson(JSON.stringify(buildConfig()));
 
   return (
     <EditorShell
@@ -958,33 +990,10 @@ function TagEditor({ entity, parentDriver, onSaved }: { entity: Tag; parentDrive
       busy={busy}
       error={error}
       saved={saved}
+      dirty={dirty}
       onSubmit={(e) => {
         e.preventDefault();
-        void save(() =>
-          updateEntity('tag', entity.id, {
-            ...entity,
-            name: name.trim(),
-            address: address.trim(),
-            dataType,
-            ...(isOpcUa ? {} : isRegisterDataType(dataType) ? { byteOrder } : {}),
-            access,
-            scanRateMs: Number(scanRateMs),
-            deadband: Number(deadband),
-            scaling: {
-              enabled: scalingEnabled,
-              type: scalingType,
-              rawMin: Number(rawMin),
-              rawMax: Number(rawMax),
-              engMin: Number(engMin),
-              engMax: Number(engMax),
-              clampLow,
-              clampHigh,
-              negate,
-            },
-            mqtt: buildMqttOverrides(entity.mqtt, mqttAgents, mqttForms),
-            description: description.trim(),
-          }),
-        );
+        void save(() => updateEntity('tag', entity.id, buildConfig()));
       }}
     >
       <IdRow id={entity.id} />
@@ -1155,35 +1164,28 @@ function TagEditor({ entity, parentDriver, onSaved }: { entity: Tag; parentDrive
           </span>
         </Row>
       )}
-      <Row label="Write Value" htmlFor="ed-tag-write">
+      <Row label="Write Value">
         {access === 'ro' ? (
           <span className="text-[11px] text-muted">Tag is read-only.</span>
         ) : (
           <span className="flex items-center gap-1.5">
-            <input
-              id="ed-tag-write"
-              type="text"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="value…"
-              value={writeRaw}
-              onChange={(e) => setWriteRaw(e.target.value)}
-              className={`${monoClass} max-w-40`}
-            />
             <button
               type="button"
-              onClick={onWrite}
-              disabled={writeBusy}
-              className="h-6 rounded-sm border border-border bg-inset px-2 text-[11px] enabled:hover:bg-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+              onClick={() => setWriteOpen(true)}
+              className="h-6 rounded-sm border border-border bg-inset px-2 text-[11px] enabled:hover:bg-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
             >
-              {writeBusy ? 'Writing…' : 'Write'}
+              Write…
             </button>
-            <span aria-live="polite" className="truncate text-[11px] text-muted" title={writeNote}>
-              {writeNote}
+            <span className="truncate text-[11px] text-muted">
+              Current:{' '}
+              <span className="font-mono tabular-nums text-fg">
+                {liveValue ? formatValue(liveValue.value) : '—'}
+              </span>
             </span>
           </span>
         )}
       </Row>
+      {writeOpen && <WriteValueDialog tag={buildConfig()} onClose={() => setWriteOpen(false)} />}
     </EditorShell>
   );
 }

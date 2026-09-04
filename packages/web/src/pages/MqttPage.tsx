@@ -5,9 +5,12 @@ import {
   deleteMqttAgent,
   getMqttAgents,
   getMqttAgentStatus,
+  testMqttConnection,
   updateMqttAgent,
 } from '../lib/api-client';
 import { slugify, uniqueId } from '../lib/ids';
+import { useProject } from '../lib/project';
+import { useToasts } from '../lib/toast';
 import type { MqttAgent, MqttAgentStatus } from '../lib/types';
 import { DataGrid } from '../components/DataGrid';
 import { Modal } from '../components/Modal';
@@ -69,6 +72,30 @@ function StateBadge({ status }: { status: MqttAgentStatus | undefined }) {
   );
 }
 
+/** Per-tag override counts on the agent grid (reads the project from context). */
+function OverrideCountCell({ agentId }: { agentId: string }) {
+  const { project } = useProject();
+  if (!project) return <span className="text-muted">—</span>;
+  let overrides = 0;
+  let optedOut = 0;
+  for (const tag of project.tags) {
+    const entry = tag.mqtt?.[agentId];
+    if (!entry) continue;
+    overrides += 1;
+    if (entry.enabled === false) optedOut += 1;
+  }
+  if (overrides === 0) return <span className="text-muted">none</span>;
+  return (
+    <span
+      title={`${overrides} tag(s) carry custom settings for this agent; ${optedOut} opted out of publishing`}
+      className="tabular-nums"
+    >
+      {overrides} override{overrides === 1 ? '' : 's'}
+      {optedOut > 0 && <span className="text-uncertain"> · {optedOut} opted out</span>}
+    </span>
+  );
+}
+
 const agentColumns: ColumnDef<MqttAgent, any>[] = [
   {
     accessorKey: 'name',
@@ -86,6 +113,13 @@ const agentColumns: ColumnDef<MqttAgent, any>[] = [
     header: 'Enabled',
     enableColumnFilter: false,
     cell: (c) => (c.getValue<boolean>() ? 'Yes' : 'No'),
+  },
+  {
+    id: 'overrides',
+    header: 'Tag Overrides',
+    enableSorting: false,
+    enableColumnFilter: false,
+    cell: ({ row }) => <OverrideCountCell agentId={row.original.id} />,
   },
 ];
 
@@ -107,7 +141,12 @@ function AgentEditor({
   const [url, setUrl] = useState(agent.url);
   const [clientId, setClientId] = useState(agent.clientId);
   const [username, setUsername] = useState(agent.username ?? '');
-  const [password, setPassword] = useState(agent.password ?? '');
+  // Stored passwords are never echoed back into the editor; the field starts
+  // empty and "set" is shown instead. Leaving it empty on save keeps the
+  // stored password (the server merges it back in).
+  const passwordSet = agent.password !== undefined && agent.password !== '';
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [keepaliveSec, setKeepaliveSec] = useState(String(agent.keepaliveSec));
   const [clean, setClean] = useState(agent.clean);
   const [rejectUnauthorized, setRejectUnauthorized] = useState(agent.tls.rejectUnauthorized);
@@ -131,50 +170,76 @@ function AgentEditor({
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const [testState, setTestState] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [testMessage, setTestMessage] = useState('');
+  const { push } = useToasts();
+
+  /** Config body from the current form. `forSave` omits the password when the
+   *  user left the field empty so the server keeps the stored one. */
+  const buildConfig = (finalUrl: string, forSave: boolean): Record<string, unknown> => ({
+    ...agent,
+    name: name.trim(),
+    enabled,
+    url: finalUrl,
+    clientId: clientId.trim(),
+    username: username.trim() === '' ? undefined : username.trim(),
+    password: password !== '' ? password : forSave ? undefined : agent.password,
+    keepaliveSec: Number(keepaliveSec),
+    clean,
+    tls: {
+      rejectUnauthorized,
+      caPath: caPath.trim() || undefined,
+      certPath: certPath.trim() || undefined,
+      keyPath: keyPath.trim() || undefined,
+    },
+    mode,
+    intervalMs: Number(intervalMs),
+    deadband: Number(deadband),
+    qos: Number(qos) as 0 | 1 | 2,
+    retain,
+    topicPattern: topicPattern.trim(),
+    payloadFormat,
+    payloadTemplate,
+    lwt: {
+      enabled: lwtEnabled,
+      topic: lwtTopic.trim(),
+      onlinePayload: lwtOnline,
+      offlinePayload: lwtOffline,
+    },
+  });
 
   const save = async (finalUrl: string) => {
     setBusy(true);
     setError('');
     setSaved(false);
     try {
-      await updateMqttAgent(agent.id, {
-        ...agent,
-        name: name.trim(),
-        enabled,
-        url: finalUrl,
-        clientId: clientId.trim(),
-        username: username.trim() === '' ? undefined : username.trim(),
-        password: password === '' ? undefined : password,
-        keepaliveSec: Number(keepaliveSec),
-        clean,
-        tls: {
-          rejectUnauthorized,
-          caPath: caPath.trim() || undefined,
-          certPath: certPath.trim() || undefined,
-          keyPath: keyPath.trim() || undefined,
-        },
-        mode,
-        intervalMs: Number(intervalMs),
-        deadband: Number(deadband),
-        qos: Number(qos) as 0 | 1 | 2,
-        retain,
-        topicPattern: topicPattern.trim(),
-        payloadFormat,
-        payloadTemplate,
-        lwt: {
-          enabled: lwtEnabled,
-          topic: lwtTopic.trim(),
-          onlinePayload: lwtOnline,
-          offlinePayload: lwtOffline,
-        },
-      });
+      await updateMqttAgent(agent.id, buildConfig(finalUrl, true));
       setSaved(true);
+      push({ tone: 'success', message: `Agent "${name.trim()}" saved.` });
       onSaved();
       window.setTimeout(() => setSaved(false), 2500);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onTest = async () => {
+    setTestState('testing');
+    setTestMessage('');
+    try {
+      const result = await testMqttConnection(buildConfig(url.trim(), false));
+      if (result.ok) {
+        setTestState('ok');
+        setTestMessage(`Connected in ${result.latencyMs ?? 0} ms — broker reachable, auth accepted.`);
+      } else {
+        setTestState('fail');
+        setTestMessage(result.error ?? 'Connection failed.');
+      }
+    } catch (err) {
+      setTestState('fail');
+      setTestMessage(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -244,7 +309,30 @@ function AgentEditor({
             <input id="mqtt-username" type="text" autoComplete="off" spellCheck={false} value={username} onChange={(e) => setUsername(e.target.value)} className={monoClass} />
           </Row>
           <Row label="Password" htmlFor="mqtt-password">
-            <input id="mqtt-password" type="password" autoComplete="off" value={password} onChange={(e) => setPassword(e.target.value)} className={monoClass} />
+            <span className="flex max-w-72 items-center gap-1.5">
+              <input
+                id="mqtt-password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="off"
+                placeholder={passwordSet ? '(set — type to replace)' : 'not set'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={`${monoClass} min-w-0 flex-1`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((s) => !s)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className={buttonClass}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+              {passwordSet && password === '' && (
+                <span className="shrink-0 rounded-sm border border-border bg-panel px-1.5 py-px text-[10px] text-muted">
+                  set
+                </span>
+              )}
+            </span>
           </Row>
           <Row label="Keepalive (s)" htmlFor="mqtt-keepalive">
             <input id="mqtt-keepalive" type="number" inputMode="numeric" min={0} autoComplete="off" value={keepaliveSec} onChange={(e) => setKeepaliveSec(e.target.value)} className={monoClass} />
@@ -343,9 +431,30 @@ function AgentEditor({
           >
             {busy ? 'Saving…' : 'Save'}
           </button>
-          <span aria-live="polite" className="text-[11px] text-good">
-            {saved ? 'Saved.' : ''}
-          </span>
+          <button
+            type="button"
+            onClick={() => void onTest()}
+            disabled={testState === 'testing'}
+            title="Attempt a throwaway broker connection with the current form values (nothing is saved)"
+            className={buttonClass}
+          >
+            {testState === 'testing' ? 'Testing…' : 'Test Connection'}
+          </button>
+          {testState === 'ok' && (
+            <span role="status" className="min-w-0 flex-1 truncate text-[11px] text-good" title={testMessage}>
+              {testMessage}
+            </span>
+          )}
+          {testState === 'fail' && (
+            <span role="alert" className="min-w-0 flex-1 truncate font-mono text-[11px] text-bad" title={testMessage}>
+              {testMessage}
+            </span>
+          )}
+          {testState !== 'ok' && testState !== 'fail' && (
+            <span aria-live="polite" className="text-[11px] text-good">
+              {saved ? 'Saved.' : ''}
+            </span>
+          )}
           {error && (
             <span role="alert" className="min-w-0 flex-1 truncate font-mono text-[11px] text-bad" title={error}>
               {error}
@@ -393,6 +502,7 @@ export function MqttPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MqttAgent | null>(null);
   const [actionError, setActionError] = useState('');
+  const { push } = useToasts();
 
   const reloadAgents = useCallback(async () => {
     try {
@@ -437,6 +547,7 @@ export function MqttPage() {
       });
       await reloadAgents();
       setSelectedId(created.id);
+      push({ tone: 'success', message: `Agent "${created.name}" created.` });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
     }
@@ -449,6 +560,7 @@ export function MqttPage() {
       setDeleteTarget(null);
       if (selectedId === deleteTarget.id) setSelectedId(null);
       await reloadAgents();
+      push({ tone: 'info', message: `Agent "${deleteTarget.name}" deleted.` });
     } catch (err) {
       setDeleteTarget(null);
       setActionError(err instanceof Error ? err.message : String(err));
@@ -478,7 +590,7 @@ export function MqttPage() {
             getRowId={(a) => a.id}
             selectedRowId={selectedId}
             onRowSelect={(a) => setSelectedId(a.id)}
-            emptyMessage="No MQTT agents. Use New Agent to create one."
+            emptyMessage="No MQTT agents. An agent publishes live tag values to an MQTT broker — use New Agent to create one."
             ariaLabel="MQTT agents"
           />
         </div>
@@ -491,8 +603,9 @@ export function MqttPage() {
               onSaved={() => void reloadAgents()}
             />
           ) : (
-            <div className="flex h-full items-center justify-center bg-panel text-[12px] text-muted">
-              Select an agent to edit its settings.
+            <div className="flex h-full items-center justify-center bg-panel px-4 text-center text-[12px] text-muted">
+              Select an agent to edit its settings, or create one with New Agent — an agent
+              publishes tag values to a broker on change or on an interval.
             </div>
           )}
         </div>

@@ -8,6 +8,8 @@ import {
   type ImporterInfo,
   type ImportResult,
 } from '../lib/api-client';
+import { useProject } from '../lib/project';
+import type { Project } from '../lib/types';
 import { Modal } from './Modal';
 
 export type ImportKind = 'project' | 'device' | 'tags';
@@ -55,7 +57,82 @@ function summarize(result: ImportResult): string {
   return parts.length > 0 ? `Imported ${parts.join(', ')}.` : 'Import complete.';
 }
 
+interface EntityDiff {
+  added: string[];
+  modified: string[];
+  removed: string[];
+}
+
+interface ProjectDiff {
+  channels: EntityDiff;
+  devices: EntityDiff;
+  tags: EntityDiff;
+  totalChanges: number;
+}
+
+type EntityList = { id: string; name?: string }[];
+
+function diffEntities(current: EntityList, incoming: EntityList): EntityDiff {
+  const currentById = new Map(current.map((e) => [e.id, e]));
+  const incomingById = new Map(incoming.map((e) => [e.id, e]));
+  const label = (e: { name?: string; id: string }) => e.name ?? e.id;
+  const added = incoming.filter((e) => !currentById.has(e.id)).map(label);
+  const modified = incoming
+    .filter((e) => {
+      const existing = currentById.get(e.id);
+      return existing !== undefined && JSON.stringify(existing) !== JSON.stringify(e);
+    })
+    .map(label);
+  const removed = current.filter((e) => !incomingById.has(e.id)).map(label);
+  return { added, modified, removed };
+}
+
+/** Client-side preview of what a native project file would change. */
+function diffProject(current: Project, incoming: Project): ProjectDiff {
+  const channels = diffEntities(current.channels, incoming.channels ?? []);
+  const devices = diffEntities(current.devices, incoming.devices ?? []);
+  const tags = diffEntities(current.tags, incoming.tags ?? []);
+  const totalChanges =
+    channels.added.length + channels.modified.length + channels.removed.length +
+    devices.added.length + devices.modified.length + devices.removed.length +
+    tags.added.length + tags.modified.length + tags.removed.length;
+  return { channels, devices, tags, totalChanges };
+}
+
+function DiffLine({ label, diff }: { label: string; diff: EntityDiff }) {
+  if (diff.added.length + diff.modified.length + diff.removed.length === 0) {
+    return (
+      <p className="text-[11px] text-muted">
+        {label}: <span>no changes</span>
+      </p>
+    );
+  }
+  const sample = (names: string[]) =>
+    names.length > 3 ? `${names.slice(0, 3).join(', ')} +${names.length - 3} more` : names.join(', ');
+  return (
+    <div className="text-[11px]">
+      <span className="text-muted">{label}: </span>
+      {diff.added.length > 0 && (
+        <span className="text-good" title={diff.added.join('\n')}>
+          +{diff.added.length} added ({sample(diff.added)}){' '}
+        </span>
+      )}
+      {diff.modified.length > 0 && (
+        <span className="text-uncertain" title={diff.modified.join('\n')}>
+          ~{diff.modified.length} modified ({sample(diff.modified)}){' '}
+        </span>
+      )}
+      {diff.removed.length > 0 && (
+        <span className="text-bad" title={diff.removed.join('\n')}>
+          −{diff.removed.length} removed ({sample(diff.removed)})
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
+  const { project } = useProject();
   const [file, setFile] = useState<File | null>(null);
   const [mode, setMode] = useState<'replace' | 'merge'>('replace');
   const [busy, setBusy] = useState(false);
@@ -64,6 +141,8 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [importers, setImporters] = useState<ImporterInfo[]>([]);
   const [format, setFormat] = useState<string>('odiserver');
+  const [preview, setPreview] = useState<ProjectDiff | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Third-party project formats appear only when a server-side importer
@@ -92,9 +171,34 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
     setResult('');
     setWarnings([]);
     setFormat('odiserver');
+    setPreview(null);
+    setReplaceConfirm('');
   }, [target]);
 
+  // Native-format project files are parsed locally to preview the diff
+  // against the current project before anything is committed.
+  useEffect(() => {
+    setPreview(null);
+    if (!file || target?.kind !== 'project' || format !== 'odiserver' || !project) return;
+    let cancelled = false;
+    file
+      .text()
+      .then((text) => {
+        if (cancelled) return;
+        const incoming = JSON.parse(text) as Project;
+        setPreview(diffProject(project, incoming));
+      })
+      .catch(() => {
+        // Unparseable files surface as an import error when submitted; no preview.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, target, format, project]);
+
   if (!target) return null;
+
+  const replaceConfirmed = mode !== 'replace' || replaceConfirm === 'REPLACE';
 
   const runImport = async () => {
     if (!file) {
@@ -233,6 +337,53 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           </fieldset>
         )}
 
+        {preview && (
+          <div
+            aria-label="Import preview"
+            className="flex flex-col gap-1 rounded-sm border border-border bg-inset px-2.5 py-2"
+          >
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+              {mode === 'replace' ? 'Will change (replace)' : 'Will change (merge)'}
+            </p>
+            {preview.totalChanges === 0 ? (
+              <p className="text-[11px] text-muted">
+                This file is identical to the current project — nothing will change.
+              </p>
+            ) : (
+              <>
+                <DiffLine label="Channels" diff={preview.channels} />
+                <DiffLine label="Devices" diff={preview.devices} />
+                <DiffLine label="Tags" diff={preview.tags} />
+                {mode === 'merge' &&
+                  preview.channels.removed.length + preview.devices.removed.length + preview.tags.removed.length >
+                    0 && (
+                    <p className="text-[11px] text-uncertain">
+                      Note: merge mode upserts only — removed entries above stay unless you choose
+                      Replace.
+                    </p>
+                  )}
+              </>
+            )}
+          </div>
+        )}
+
+        {target.kind === 'project' && mode === 'replace' && !result && (
+          <label className="flex items-center gap-2 rounded-sm border border-bad/40 bg-bad-bg px-2.5 py-2 text-[12px] text-bad">
+            <span className="shrink-0">
+              Type <span className="font-mono font-semibold">REPLACE</span> to confirm:
+            </span>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={replaceConfirm}
+              onChange={(e) => setReplaceConfirm(e.target.value)}
+              aria-label="Type REPLACE to confirm project replacement"
+              className={`h-6 w-28 rounded-sm border border-border bg-inset px-1.5 font-mono text-[12px] text-fg ${focusRing}`}
+            />
+          </label>
+        )}
+
         {error && (
           <p
             role="alert"
@@ -247,11 +398,15 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           </p>
         )}
         {warnings.length > 0 && (
-          <div className="max-h-32 overflow-auto rounded-sm border border-border bg-inset px-2 py-1.5">
-            <p className="text-[11px] font-medium text-muted">
-              {warnings.length} import note(s):
+          <div
+            role="alert"
+            className="max-h-32 overflow-auto rounded-sm border border-uncertain bg-uncertain-bg px-2.5 py-2"
+          >
+            <p className="text-[12px] font-semibold text-uncertain">
+              ⚠ {warnings.length} importer warning{warnings.length === 1 ? '' : 's'} — review before
+              proceeding
             </p>
-            <ul className="list-inside list-disc text-[11px] text-fg">
+            <ul className="mt-1 list-inside list-disc text-[11px] text-fg">
               {warnings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
@@ -283,7 +438,8 @@ export function ImportModal({ target, onClose, onImported }: ImportModalProps) {
           ) : (
             <button
               type="submit"
-              disabled={busy || !file}
+              disabled={busy || !file || !replaceConfirmed}
+              title={!replaceConfirmed ? 'Type REPLACE above to enable a replace import' : undefined}
               className={`h-7 rounded-sm border border-accent bg-accent px-3 text-[12px] font-medium text-accent-fg enabled:hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60 ${focusRing}`}
             >
               {busy ? 'Importing…' : 'Import'}

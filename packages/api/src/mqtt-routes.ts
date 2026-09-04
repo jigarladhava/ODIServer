@@ -4,6 +4,8 @@ import type { ConfigStore } from "@odiserver/core";
 /** Minimal status-provider interface so the API package doesn't depend on the server package. */
 export interface MqttStatusProvider {
   getStatus(): unknown;
+  /** One-shot broker connectivity probe; optional (404s when unavailable). */
+  testConnection?(config: unknown): Promise<{ ok: boolean; error?: string; latencyMs?: number }>;
 }
 
 /**
@@ -15,6 +17,19 @@ export function mqttAgentRoutes(store: ConfigStore, mqtt?: MqttStatusProvider): 
 
   router.get("/status", (_req: Request, res: Response) => {
     res.json(mqtt?.getStatus() ?? {});
+  });
+
+  // Broker connectivity probe for the console's "Test connection" button.
+  // Mounted before "/:id" so the literal path wins.
+  router.post("/test", async (req: Request, res: Response) => {
+    if (!mqtt?.testConnection) {
+      return res.status(501).json({ error: "connection testing is not available" });
+    }
+    try {
+      res.json(await mqtt.testConnection(req.body));
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   router.get("/", (_req: Request, res: Response) => {
@@ -37,7 +52,14 @@ export function mqttAgentRoutes(store: ConfigStore, mqtt?: MqttStatusProvider): 
 
   router.put("/:id", (req: Request, res: Response) => {
     try {
-      res.json(store.upsertMqttAgent({ ...req.body, id: req.params.id }));
+      const body = { ...req.body, id: req.params.id };
+      // The console never echoes stored passwords back to the editor; an
+      // omitted password on update means "keep the existing one".
+      if (body.password === undefined) {
+        const existing = store.getMqttAgent(req.params.id);
+        if (existing?.password !== undefined) body.password = existing.password;
+      }
+      res.json(store.upsertMqttAgent(body));
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }

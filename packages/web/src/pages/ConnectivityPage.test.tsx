@@ -59,17 +59,20 @@ vi.mock('../lib/project', () => ({
 }));
 
 vi.mock('../lib/live-values', () => ({
-  useTagValues: () => ({ values: {}, connected: true }),
+  useTagValues: () => ({ values: {}, trends: {}, connected: true, paused: false, setPaused: vi.fn() }),
 }));
 
+import { DirtyGuardProvider } from '../lib/dirty';
 import { ConnectivityPage } from './ConnectivityPage';
 
 function renderAt(url: string) {
   return render(
     <MemoryRouter initialEntries={[url]}>
-      <Routes>
-        <Route path="/" element={<ConnectivityPage />} />
-      </Routes>
+      <DirtyGuardProvider>
+        <Routes>
+          <Route path="/" element={<ConnectivityPage />} />
+        </Routes>
+      </DirtyGuardProvider>
     </MemoryRouter>,
   );
 }

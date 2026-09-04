@@ -1,9 +1,11 @@
 import type { Logger } from "pino";
-import type { ConfigStore, EventLog, TagEngine } from "@odiserver/core";
+import { MqttAgentSchema, type ConfigStore, type EventLog, type TagEngine } from "@odiserver/core";
 import {
   MqttAgentRuntime,
+  testMqttConnection,
   type MqttAgentStatus,
   type MqttConnectFn,
+  type MqttTestResult,
 } from "./agent-runtime.js";
 
 /**
@@ -26,6 +28,8 @@ export interface MqttManagerOptions {
 
 export interface MqttAgentManager {
   getStatus(): Record<string, MqttAgentStatus>;
+  /** One-shot broker reachability/auth probe for the console's Test button. */
+  testConnection(config: unknown): Promise<MqttTestResult>;
   stop(): void;
 }
 
@@ -81,6 +85,10 @@ export function startMqttAgents(options: MqttManagerOptions): MqttAgentManager {
       const out: Record<string, MqttAgentStatus> = {};
       for (const [id, entry] of runtimes) out[id] = entry.runtime.getStatus();
       return out;
+    },
+    async testConnection(config) {
+      const agent = MqttAgentSchema.parse(config);
+      return testMqttConnection(agent, dataDir, connectFn);
     },
     stop() {
       clearTimeout(reconcileTimer);

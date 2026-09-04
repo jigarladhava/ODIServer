@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ColumnDef } from '@tanstack/react-table';
-import { formatTimestamp, formatValue } from '../lib/format';
-import { useTagValues } from '../lib/live-values';
+import { formatRelativeTime, formatTimestamp, formatValue } from '../lib/format';
+import { useDirtyGuard } from '../lib/dirty';
+import { useTagValues, type Trend } from '../lib/live-values';
 import { useProject } from '../lib/project';
 import type { Channel, DataType, Device, Driver, EntityKind, Tag } from '../lib/types';
 import { DATA_TYPE_LABELS } from '../lib/labels';
@@ -13,7 +14,7 @@ import { EventLogView } from '../components/EventLogView';
 import { PropertyInspector, type PropertyEntry } from '../components/PropertyInspector';
 import { QualityBadge } from '../components/QualityBadge';
 import { Tabs } from '../components/Tabs';
-import { Tree, type TreeNode } from '../components/Tree';
+import { Tree, type NodeHealth, type TreeNode } from '../components/Tree';
 
 type Selection =
   | { kind: 'connectivity' }
@@ -57,8 +58,21 @@ function EnabledBadge({ enabled }: { enabled: boolean }) {
 }
 
 /** Live cells — read the WS-fed value map straight from context. */
+function TrendArrow({ trend }: { trend: Trend | undefined }) {
+  if (!trend || trend === 'flat') return null;
+  return (
+    <span
+      aria-hidden="true"
+      title={trend === 'up' ? 'Value rising' : 'Value falling'}
+      className={`text-[10px] leading-none ${trend === 'up' ? 'text-good' : 'text-bad'}`}
+    >
+      {trend === 'up' ? '▲' : '▼'}
+    </span>
+  );
+}
+
 function LiveValueCell({ tagId }: { tagId: string }) {
-  const { values } = useTagValues();
+  const { values, trends } = useTagValues();
   const v = values[tagId];
   if (!v) return <span className="font-mono tabular-nums">—</span>;
   if (v.value === null && v.error) {
@@ -68,7 +82,12 @@ function LiveValueCell({ tagId }: { tagId: string }) {
       </span>
     );
   }
-  return <span className="font-mono tabular-nums">{formatValue(v.value)}</span>;
+  return (
+    <span className="flex items-center gap-1 font-mono tabular-nums">
+      <TrendArrow trend={trends[tagId]} />
+      {formatValue(v.value)}
+    </span>
+  );
 }
 
 function LiveQualityCell({ tagId }: { tagId: string }) {
@@ -86,7 +105,12 @@ function LiveTimestampCell({ tagId }: { tagId: string }) {
   const { values } = useTagValues();
   const v = values[tagId];
   return (
-    <span className="font-mono tabular-nums">{v ? formatTimestamp(v.timestamp) : '—'}</span>
+    <span
+      title={v ? formatTimestamp(v.timestamp) : undefined}
+      className="font-mono tabular-nums"
+    >
+      {v ? formatRelativeTime(v.timestamp) : '—'}
+    </span>
   );
 }
 
@@ -188,14 +212,43 @@ const tagColumns: ColumnDef<Tag, any>[] = [
 
 export function ConnectivityPage() {
   const { project, refresh } = useProject();
+  const { values, paused, setPaused } = useTagValues();
+  const { confirmDiscard } = useDirtyGuard();
   const [treeFilter, setTreeFilter] = useState('');
   const [activeTab, setActiveTab] = useState('items');
   const [searchParams, setSearchParams] = useSearchParams();
+  const [bannerDismissed, setBannerDismissed] = useState<Set<string>>(new Set());
 
   const nodeId = searchParams.get('node') ?? 'connectivity';
   const rowId = searchParams.get('row');
   const selection = useMemo(() => parseNodeId(nodeId), [nodeId]);
 
+  // Per-device connection health from live tag quality: any bad tag = bad,
+  // any uncertain = uncertain, otherwise good. Devices with no live data yet
+  // report no health (dot hidden). Single pass over tags.
+  const deviceHealth = useMemo(() => {
+    const health: Record<string, NodeHealth> = {};
+    if (!project) return health;
+    const rank: Record<NodeHealth, number> = { good: 0, uncertain: 1, bad: 2 };
+    for (const tag of project.tags) {
+      const q = values[tag.id]?.quality;
+      if (!q) continue;
+      const prev = health[tag.deviceId];
+      if (!prev || rank[q] > rank[prev]) health[tag.deviceId] = q;
+    }
+    return health;
+  }, [project, values]);
+
+  // Devices where every live tag is bad — a likely comm failure worth a banner.
+  const droppedDevices = useMemo(() => {
+    if (!project) return [];
+    return project.devices.filter(
+      (d) => deviceHealth[d.id] === 'bad' && !bannerDismissed.has(d.id),
+    );
+  }, [project, deviceHealth, bannerDismissed]);
+
+  // Keep tree node objects stable across value updates; health arrives via a
+  // separate map so only the dot re-renders when a device's health changes.
   const tree = useMemo<TreeNode[]>(() => {
     if (!project) return [];
     return [
@@ -219,6 +272,23 @@ export function ConnectivityPage() {
       { id: 'eventlog', label: 'Event Log', type: 'eventlog' },
     ];
   }, [project]);
+
+  const treeHealthRef = useRef<Record<string, NodeHealth>>({});
+  const treeHealth = useMemo(() => {
+    const next: Record<string, NodeHealth> = {};
+    for (const [deviceId, health] of Object.entries(deviceHealth)) {
+      next[`device:${deviceId}`] = health;
+    }
+    // Preserve identity when nothing changed so memoized tree rows don't re-render.
+    const prev = treeHealthRef.current;
+    const prevKeys = Object.keys(prev);
+    const same =
+      prevKeys.length === Object.keys(next).length &&
+      prevKeys.every((k) => next[k] === prev[k]);
+    if (same) return prev;
+    treeHealthRef.current = next;
+    return next;
+  }, [deviceHealth]);
 
   const breadcrumb = useMemo(() => {
     if (!project) return ['Connectivity'];
@@ -333,12 +403,14 @@ export function ConnectivityPage() {
 
   const onTreeSelect = useCallback(
     (node: TreeNode) => {
+      if (node.id !== nodeId && !confirmDiscard()) return;
       setSearchParams(node.id === 'connectivity' ? {} : { node: node.id });
     },
-    [setSearchParams],
+    [setSearchParams, confirmDiscard, nodeId],
   );
 
   const onRowSelect = (id: string) => {
+    if (id !== rowId && !confirmDiscard()) return;
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.set('row', id);
@@ -417,13 +489,52 @@ export function ConnectivityPage() {
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <BreadcrumbBar segments={breadcrumb} filter={treeFilter} onFilterChange={setTreeFilter} />
-      <div className="flex min-h-0 flex-1">
+      {droppedDevices.length > 0 && (
+        <div
+          role="alert"
+          className="flex shrink-0 items-center gap-2 border-b border-bad/40 bg-bad-bg px-3 py-1 text-[12px] text-bad"
+        >
+          <span aria-hidden="true">⚠</span>
+          <span className="min-w-0 flex-1 truncate">
+            {droppedDevices.length === 1
+              ? `Device "${droppedDevices[0].name}" is not communicating — all tags report bad quality.`
+              : `${droppedDevices.length} devices are not communicating: ${droppedDevices
+                  .map((d) => d.name)
+                  .join(', ')}.`}
+            {' '}See the Event Log for details.
+          </span>
+          <button
+            type="button"
+            onClick={() => onTreeSelect({ id: 'eventlog', label: 'Event Log', type: 'eventlog' })}
+            className="shrink-0 rounded-sm border border-current px-2 py-0.5 text-[11px] font-medium hover:brightness-110 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          >
+            Open Event Log
+          </button>
+          <button
+            type="button"
+            aria-label="Dismiss device alert"
+            onClick={() =>
+              setBannerDismissed(new Set([...bannerDismissed, ...droppedDevices.map((d) => d.id)]))
+            }
+            className="shrink-0 px-1 hover:brightness-110 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-x-auto">
         <aside className="w-60 shrink-0 overflow-auto border-r border-border bg-panel">
-          <Tree nodes={tree} selectedId={nodeId} onSelect={onTreeSelect} filter={treeFilter} />
+          <Tree
+            nodes={tree}
+            selectedId={nodeId}
+            onSelect={onTreeSelect}
+            filter={treeFilter}
+            health={treeHealth}
+          />
         </aside>
-        <section className="flex min-w-0 flex-1 flex-col bg-inset">
+        <section className="flex min-w-[480px] flex-1 flex-col bg-inset">
           {selection.kind === 'eventlog' ? (
             <div className="min-h-0 flex-1">
               <EventLogView />
@@ -439,6 +550,26 @@ export function ConnectivityPage() {
                 ]}
                 activeId={activeTab}
                 onChange={setActiveTab}
+                trailing={
+                  selection.kind === 'device' ? (
+                    <button
+                      type="button"
+                      onClick={() => setPaused(!paused)}
+                      aria-pressed={paused}
+                      title={
+                        paused
+                          ? 'Resume live value updates'
+                          : 'Pause live value updates (the grid stops moving while you scroll)'
+                      }
+                      className="flex h-5 items-center gap-1 rounded-sm border border-border bg-inset px-2 text-[11px] text-fg hover:bg-hover focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+                    >
+                      <span aria-hidden="true" className={paused ? 'text-muted' : 'text-good'}>
+                        {paused ? '❚❚' : '●'}
+                      </span>
+                      {paused ? 'Paused' : 'Live'}
+                    </button>
+                  ) : undefined
+                }
               />
               <div className="min-h-0 flex-1">
                 {activeTab === 'log' ? (

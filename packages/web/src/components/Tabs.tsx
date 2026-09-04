@@ -1,16 +1,21 @@
+import type { ReactNode } from 'react';
+
 interface Tab {
   id: string;
   label: string;
 }
+
 
 interface TabsProps {
   tabs: Tab[];
   activeId: string;
   onChange: (id: string) => void;
   ariaLabel?: string;
+  /** Optional content pinned to the right end of the tab strip. */
+  trailing?: ReactNode;
 }
 
-export function Tabs({ tabs, activeId, onChange, ariaLabel }: TabsProps) {
+export function Tabs({ tabs, activeId, onChange, ariaLabel, trailing }: TabsProps) {
   return (
     <div
       role="tablist"
@@ -36,6 +41,7 @@ export function Tabs({ tabs, activeId, onChange, ariaLabel }: TabsProps) {
           </button>
         );
       })}
+      {trailing && <div className="mb-1 ml-auto flex items-center gap-1">{trailing}</div>}
     </div>
   );
 }

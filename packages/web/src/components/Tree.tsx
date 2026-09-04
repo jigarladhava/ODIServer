@@ -9,6 +9,8 @@ import {
 
 export type NodeType = 'connectivity' | 'channel' | 'device' | 'group' | 'eventlog';
 
+export type NodeHealth = 'good' | 'uncertain' | 'bad';
+
 export interface TreeNode {
   id: string;
   label: string;
@@ -21,6 +23,8 @@ interface TreeProps {
   selectedId: string | null;
   onSelect: (node: TreeNode) => void;
   filter?: string;
+  /** Health dot per node id (device nodes); kept separate so value bursts don't rebuild the tree. */
+  health?: Record<string, NodeHealth>;
 }
 
 const focusRing =
@@ -39,6 +43,25 @@ function NodeIcon({ type }: { type: NodeType }) {
     case 'eventlog':
       return <EventLogIcon />;
   }
+}
+
+const healthColors: Record<NodeHealth, string> = {
+  good: 'text-good',
+  uncertain: 'text-uncertain',
+  bad: 'text-bad',
+};
+
+function HealthDot({ health }: { health: NodeHealth }) {
+  return (
+    <span
+      role="img"
+      aria-label={`health: ${health}`}
+      title={`Connection health: ${health}`}
+      className={`ml-auto shrink-0 pl-1 text-[9px] leading-none ${healthColors[health]}`}
+    >
+      ●
+    </span>
+  );
 }
 
 function nodeMatches(node: TreeNode, filter: string): boolean {
@@ -87,6 +110,7 @@ interface RowProps {
   selectedPath: Set<string>;
   onSelect: (node: TreeNode) => void;
   filter: string;
+  healthMap?: Record<string, NodeHealth>;
 }
 
 function rowPropsEqual(prev: RowProps, next: RowProps): boolean {
@@ -97,7 +121,8 @@ function rowPropsEqual(prev: RowProps, next: RowProps): boolean {
     prev.onToggle !== next.onToggle ||
     prev.onSelect !== next.onSelect ||
     prev.selected !== next.selected ||
-    prev.filter !== next.filter
+    prev.filter !== next.filter ||
+    prev.healthMap?.[prev.node.id] !== next.healthMap?.[next.node.id]
   ) {
     return false;
   }
@@ -120,6 +145,7 @@ const TreeRow = memo(function TreeRow({
   selectedPath,
   onSelect,
   filter,
+  healthMap,
 }: RowProps) {
   if (filter && !nodeMatches(node, filter)) return null;
   const children = node.children ?? [];
@@ -162,6 +188,7 @@ const TreeRow = memo(function TreeRow({
           <span translate="no" className="truncate">
             {node.label}
           </span>
+          {healthMap?.[node.id] && <HealthDot health={healthMap[node.id]!} />}
         </button>
       </div>
       {expanded &&
@@ -177,13 +204,14 @@ const TreeRow = memo(function TreeRow({
             selectedPath={selectedPath}
             onSelect={onSelect}
             filter={filter}
+            healthMap={healthMap}
           />
         ))}
     </div>
   );
 }, rowPropsEqual);
 
-export function Tree({ nodes, selectedId, onSelect, filter = '' }: TreeProps) {
+export function Tree({ nodes, selectedId, onSelect, filter = '', health }: TreeProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const normalizedFilter = filter.trim().toLowerCase();
   const selectedPath = useMemo(() => findSelectedPath(nodes, selectedId), [nodes, selectedId]);
@@ -225,6 +253,7 @@ export function Tree({ nodes, selectedId, onSelect, filter = '' }: TreeProps) {
           selectedPath={selectedPath}
           onSelect={onSelectStable}
           filter={normalizedFilter}
+          healthMap={health}
         />
       ))}
     </div>
