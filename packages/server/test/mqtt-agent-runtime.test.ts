@@ -6,6 +6,9 @@ import {
 } from "../src/mqtt/agent-runtime.js";
 import type { IClientOptions } from "mqtt";
 
+// Tests use loopback/private broker URLs with a fake client; allow them.
+process.env.ODISERVER_MQTT_ALLOW_PRIVATE = "1";
+
 class FakeMqttClient implements MqttClientLike {
   connected = false;
   ended = false;

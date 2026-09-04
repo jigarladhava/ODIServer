@@ -71,7 +71,11 @@ export const TAG_CSV_COLUMNS = [
 ] as const;
 
 function csvEscape(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  // Neutralize spreadsheet formula injection: values that would otherwise be
+  // interpreted as formulas (=, +, -, @, tab, CR) when the CSV is opened in
+  // Excel/LibreOffice get a leading apostrophe, forcing text context.
+  const neutralized = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(neutralized) ? `"${neutralized.replace(/"/g, '""')}"` : neutralized;
 }
 
 /** Serialize tags to CSV (header row + one row per tag). */

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import mqtt, { type IClientOptions, type MqttClient } from "mqtt";
 import type { Logger } from "pino";
 import type {
@@ -73,6 +73,51 @@ export function normalizeBrokerUrl(url: string): string {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(url) ? url : `mqtt://${url}`;
 }
 
+/** Schemes an agent may use to reach a broker (mqtt.js MQTT transports). */
+const ALLOWED_BROKER_SCHEMES = new Set(["mqtt", "mqtts", "ws", "wss", "tcp"]);
+
+const PRIVATE_HOST_PATTERN =
+  /^(localhost|127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1|fc|fd)/i;
+
+/**
+ * Validate an operator-supplied broker URL before it is used. Rejects
+ * non-MQTT schemes (egress filter) and loopback/private/link-local targets
+ * unless the deployment explicitly opts in via ODISERVER_MQTT_ALLOW_PRIVATE=1.
+ * Returns the normalized URL.
+ */
+export function assertBrokerUrlAllowed(rawUrl: string): string {
+  const url = normalizeBrokerUrl(rawUrl);
+  const parsed = new URL(url);
+  const scheme = parsed.protocol.replace(/:$/, "");
+  if (!ALLOWED_BROKER_SCHEMES.has(scheme)) {
+    throw new Error(`Unsupported broker scheme: ${parsed.protocol}`);
+  }
+  if (process.env.ODISERVER_MQTT_ALLOW_PRIVATE !== "1" && PRIVATE_HOST_PATTERN.test(parsed.hostname)) {
+    throw new Error(
+      `Refusing private/loopback broker host "${parsed.hostname}" (set ODISERVER_MQTT_ALLOW_PRIVATE=1 to allow LAN brokers)`,
+    );
+  }
+  return url;
+}
+
+/**
+ * Resolve an operator-supplied TLS PEM path strictly inside the allowed TLS
+ * root (ODISERVER_TLS_DIR, or <dataDir>/tls). Absolute paths and ".." escapes
+ * outside the root are rejected.
+ */
+export function resolveTlsPemPath(path: string, dataDir?: string): string {
+  const tlsRoot = process.env.ODISERVER_TLS_DIR ?? (dataDir ? join(dataDir, "tls") : undefined);
+  if (!tlsRoot) {
+    throw new Error("TLS agent config requires a dataDir or ODISERVER_TLS_DIR");
+  }
+  const resolvedRoot = resolve(tlsRoot);
+  const resolved = resolve(resolvedRoot, path);
+  if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + sep)) {
+    throw new Error(`TLS path escapes the allowed directory: ${path}`);
+  }
+  return resolved;
+}
+
 /** Connect options for an agent config, shared by the runtime and the test-connection probe. */
 export function buildMqttConnectOptions(
   agent: MqttAgentConfig,
@@ -92,8 +137,9 @@ export function buildMqttConnectOptions(
   const url = normalizeBrokerUrl(agent.url);
   if (url.startsWith("mqtts://") || url.startsWith("wss://")) {
     options.rejectUnauthorized = agent.tls.rejectUnauthorized;
-    const readPem = (path: string) =>
-      readFileSync(isAbsolute(path) || !dataDir ? path : resolve(dataDir, path));
+    // PEM paths are operator trust material: resolve them strictly inside
+    // the server's TLS directory (ODISERVER_TLS_DIR or <dataDir>/tls).
+    const readPem = (path: string) => readFileSync(resolveTlsPemPath(path, dataDir));
     if (agent.tls.caPath) options.ca = readPem(agent.tls.caPath);
     if (agent.tls.certPath) options.cert = readPem(agent.tls.certPath);
     if (agent.tls.keyPath) options.key = readPem(agent.tls.keyPath);
@@ -144,7 +190,7 @@ export function testMqttConnection(
     };
     try {
       client = connectFn(
-        normalizeBrokerUrl(agent.url),
+        assertBrokerUrlAllowed(agent.url),
         buildMqttConnectOptions(agent, dataDir, { reconnectPeriod: 0 }),
       );
     } catch (err) {
@@ -203,7 +249,7 @@ export class MqttAgentRuntime {
 
     const connectFn = options.connectFn ?? defaultConnect;
     try {
-      this.client = connectFn(normalizeBrokerUrl(this.agent.url), this.buildConnectOptions(options.dataDir));
+      this.client = connectFn(assertBrokerUrlAllowed(this.agent.url), this.buildConnectOptions(options.dataDir));
     } catch (err) {
       this.statusState = "error";
       this.lastError = err instanceof Error ? err.message : String(err);

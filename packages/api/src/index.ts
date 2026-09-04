@@ -6,7 +6,7 @@ import { eventRoutes } from "./event-routes.js";
 import { deviceTransferRoutes, projectTransferRoutes, tagTransferRoutes } from "./transfer-routes.js";
 import { importerRoutes } from "./import-routes.js";
 import type { ImporterPlugin } from "./importers.js";
-import { mqttAgentRoutes, type MqttStatusProvider } from "./mqtt-routes.js";
+import { mqttAgentRoutes, redactMqttAgent, type MqttStatusProvider } from "./mqtt-routes.js";
 import { attachTagWebSocket } from "./ws.js";
 
 export type { ImporterPlugin } from "./importers.js";
@@ -23,12 +23,25 @@ export interface ApiOptions {
   importers?: ImporterPlugin[];
   /** Server event log (optional; enables /api/events). */
   events?: EventLog;
+  /**
+   * Bearer token required for all /api routes. Defaults to the
+   * ODISERVER_API_TOKEN env var; when unset the gate is disabled.
+   */
+  apiToken?: string;
 }
 
 /** Build the ODIServer Express app (REST + static web console). */
 export function createApiApp(options: ApiOptions): Express {
   const { store, engine, webDistDir } = options;
   const app = express();
+  // Bearer-token gate: every /api request must present the configured token.
+  const apiToken = options.apiToken ?? process.env.ODISERVER_API_TOKEN;
+  if (apiToken) {
+    app.use("/api", (req: Request, res: Response, next: () => void) => {
+      if (req.headers.authorization === `Bearer ${apiToken}`) return next();
+      res.status(401).json({ error: "unauthorized" });
+    });
+  }
   // Full-project imports of converted Kepware projects run to several MB
   // (13k+ tags), well past the 100kb default — give JSON bodies headroom.
   app.use(express.json({ limit: "30mb" }));
@@ -53,7 +66,8 @@ export function createApiApp(options: ApiOptions): Express {
   });
 
   app.get("/api/project", (_req: Request, res: Response) => {
-    res.json(store.getProject());
+    const project = store.getProject();
+    res.json({ ...project, mqttAgents: project.mqttAgents.map(redactMqttAgent) });
   });
 
   // Transfer routes must be mounted before the generic entity routes so

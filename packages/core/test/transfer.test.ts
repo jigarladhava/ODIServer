@@ -66,6 +66,19 @@ describe("tag CSV transfer", () => {
     ]);
   });
 
+  it("neutralizes spreadsheet formula prefixes in CSV export", () => {
+    const csv = tagsToCsv([
+      makeTag({ name: "=cmd|'/c calc'!A1", address: "+1", description: "@SUM(A1)" }),
+    ]);
+    const dataRow = csv.split("\r\n")[1];
+    expect(dataRow).toContain("'=cmd|'/c calc'!A1");
+    expect(dataRow).toContain("'+1");
+    expect(dataRow).toContain("'@SUM(A1)");
+    for (const line of csv.split("\r\n").slice(1)) {
+      expect(line).not.toMatch(/^[^,]*[=+\-@]/);
+    }
+  });
+
   it("applies defaults for missing optional columns", () => {
     const parsed = csvToTags("name,address\nMy Tag,40010\n", "dev9");
     expect(parsed).toHaveLength(1);

@@ -45,7 +45,10 @@ beforeAll(async () => {
   store.upsertTag({ id: "d1.count", deviceId: "d1", name: "Count", address: "40003", dataType: "uint16" } as TagConfig);
   engine.load(store.listTags());
 
-  server = await startOpcUaServer({ engine, store, port: PORT, certsDir });
+  // The test exercises address-space behavior, not auth: opt into the
+  // anonymous/cleartext development mode the lockdown disables by default.
+  process.env.ODISERVER_OPCUA_ALLOW_INSECURE = "1";
+  server = await startOpcUaServer({ engine, store, port: PORT, certsDir, allowAnonymous: true });
 
   client = OPCUAClient.create({
     securityMode: MessageSecurityMode.None,
@@ -58,6 +61,7 @@ beforeAll(async () => {
 }, 90000);
 
 afterAll(async () => {
+  delete process.env.ODISERVER_OPCUA_ALLOW_INSECURE;
   await session?.close(true).catch(() => {});
   await client?.disconnect().catch(() => {});
   await server?.stop().catch(() => {});

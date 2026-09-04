@@ -6,6 +6,7 @@ import {
   DataValue,
   OPCUACertificateManager,
   OPCUAServer,
+  SecurityPolicy,
   StatusCodes,
   Variant,
   type StatusCode,
@@ -48,6 +49,17 @@ export interface OpcUaServerOptions {
   serverName?: string;
   /** Directory for the auto-generated server certificate. */
   certsDir: string;
+  /**
+   * Allow anonymous OPC UA sessions. Defaults to ODISERVER_OPCUA_ALLOW_ANONYMOUS=1;
+   * otherwise false (username/password required).
+   */
+  allowAnonymous?: boolean;
+  /**
+   * Permitted OPC UA users (username -> password). Defaults to
+   * ODISERVER_OPCUA_USERS ("user:pass,user2:pass2") or
+   * ODISERVER_OPCUA_USERNAME + ODISERVER_OPCUA_PASSWORD.
+   */
+  users?: Record<string, string>;
   logger?: Logger;
 }
 
@@ -116,11 +128,38 @@ function toStatusCode(quality: Quality): StatusCode {
   }
 }
 
+function usersFromEnv(): Record<string, string> {
+  const users: Record<string, string> = {};
+  const list = process.env.ODISERVER_OPCUA_USERS;
+  if (list) {
+    for (const entry of list.split(",")) {
+      const sep = entry.indexOf(":");
+      if (sep > 0) users[entry.slice(0, sep).trim()] = entry.slice(sep + 1);
+    }
+  }
+  const username = process.env.ODISERVER_OPCUA_USERNAME;
+  const password = process.env.ODISERVER_OPCUA_PASSWORD;
+  if (username && password !== undefined) users[username] = password;
+  return users;
+}
+
 export async function startOpcUaServer(options: OpcUaServerOptions): Promise<OpcUaServerHandle> {
   const { engine, store, port } = options;
   const serverName = options.serverName ?? "ODIServer";
   const logger = options.logger;
   mkdirSync(options.certsDir, { recursive: true });
+
+  const allowAnonymous =
+    options.allowAnonymous ?? process.env.ODISERVER_OPCUA_ALLOW_ANONYMOUS === "1";
+  const users = options.users ?? usersFromEnv();
+  if (!allowAnonymous && Object.keys(users).length === 0) {
+    logger?.warn(
+      "OPC UA anonymous access is disabled and no users are configured (ODISERVER_OPCUA_USERS) — all sessions will be rejected",
+    );
+  }
+  // Cleartext SecurityPolicy None is only offered behind an explicit opt-in.
+  const allowInsecure = process.env.ODISERVER_OPCUA_ALLOW_INSECURE === "1";
+  const autoAcceptCerts = process.env.ODISERVER_OPCUA_AUTO_ACCEPT_CERTS === "1";
 
   const server = new OPCUAServer({
     port,
@@ -139,12 +178,21 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
       buildNumber: "1",
       buildDate: new Date(2024, 0, 1),
     },
-    allowAnonymous: true,
+    allowAnonymous,
+    userManager: {
+      isValidUser: (username: string, password: string) =>
+        users[username] !== undefined && users[username] === password,
+    },
+    securityPolicies: allowInsecure
+      ? [SecurityPolicy.None, SecurityPolicy.Basic256Sha256, SecurityPolicy.Aes128_Sha256_RsaOaep]
+      : [SecurityPolicy.Basic256Sha256, SecurityPolicy.Aes128_Sha256_RsaOaep],
     // Cert/key paths derive from this manager; a self-signed certificate is
-    // generated automatically on first start.
+    // generated automatically on first start. Unknown client certificates are
+    // rejected until an operator moves them from rejected/ to trusted/ in the
+    // PKI directory (or opts in to auto-accept for development).
     serverCertificateManager: new OPCUACertificateManager({
       rootFolder: join(options.certsDir, "pki"),
-      automaticallyAcceptUnknownCertificate: true,
+      automaticallyAcceptUnknownCertificate: autoAcceptCerts,
     }),
   });
 

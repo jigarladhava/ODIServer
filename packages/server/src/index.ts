@@ -25,6 +25,11 @@ export interface OdiServerHandle {
 
 export interface OdiServerOptions {
   port?: number;
+  /**
+   * HTTP bind address. Defaults to ODISERVER_HOST, then loopback — set
+   * ODISERVER_HOST=0.0.0.0 explicitly to expose the API on the network.
+   */
+  host?: string;
   dataDir?: string;
   logger?: Logger;
   /** Northbound OPC UA server; enabled on port 49320 by default. */
@@ -42,6 +47,16 @@ function defaultWebDistDir(): string | undefined {
 export async function startOdiServer(options: OdiServerOptions = {}): Promise<OdiServerHandle> {
   const logger = options.logger ?? pino({ name: "odiserver" });
   const port = options.port ?? Number(process.env.ODISERVER_PORT ?? 8080);
+  const host = options.host ?? process.env.ODISERVER_HOST ?? "127.0.0.1";
+  const apiToken = process.env.ODISERVER_API_TOKEN;
+  if (!apiToken) {
+    logger.warn(
+      "ODISERVER_API_TOKEN is not set — the REST/WS API is unauthenticated; set it before exposing the server",
+    );
+  }
+  if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") {
+    logger.warn({ host }, "ODIServer API binding to a non-loopback interface");
+  }
   const dataDir = options.dataDir ?? resolveDataDir();
   const { dbPath, nodeRedDir } = ensureDataDirs(dataDir);
 
@@ -67,9 +82,10 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
     mqtt,
     importers,
     events,
+    apiToken,
   });
   const httpServer = createServer(app);
-  attachTagWebSocket(httpServer, engine, events);
+  attachTagWebSocket(httpServer, engine, events, apiToken);
 
   // ---- event log wiring -------------------------------------------------
 
@@ -171,9 +187,9 @@ export async function startOdiServer(options: OdiServerOptions = {}): Promise<Od
     }, 500);
   });
 
-  await new Promise<void>((resolveListen) => httpServer.listen(port, resolveListen));
-  logger.info({ port, dataDir }, "ODIServer API listening");
-  events.info("server", `ODIServer API listening on port ${port}`);
+  await new Promise<void>((resolveListen) => httpServer.listen(port, host, resolveListen));
+  logger.info({ port, host, dataDir }, "ODIServer API listening");
+  events.info("server", `ODIServer API listening on ${host}:${port}`);
 
   await startEmbeddedNodeRed({ httpServer, nodeRedDir, engine, store });
   logger.info("embedded Node-RED started");
