@@ -452,130 +452,229 @@ function deviceStatusNodes(device: DeviceConfig): NodeRedNode[] {
 /* ------------------------------------------------------------------ *
  * OPC UA client driver (node-red-contrib-opcua)
  *
- * Per opcua-client channel:
- *   odi-opcua-sub ──> OpcUa-Client ──(values)──> odi-opcua-in
- *   odi-opcua-out ──>      │       ──(errors)──>      │
- *                    status(client) ────────────>     │
+ * Per connection group (channels sharing endpoint + security + auth):
+ *   odi-opcua-sub (per channel) ──> OpcUa-Client ──(values)──> odi-opcua-in (one per group)
+ *   odi-opcua-out (per channel) ──>      │       ──(errors)──>      │
+ *                             status(client) ────────────>     │
  *
- * odi-opcua-sub emits one subscribe msg per tag ({ topic: nodeId,
- * interval: scanRateMs }); the client node queues them while connecting
- * and auto-resubscribes after reconnects. odi-opcua-in routes inbound
- * msgs to the tag engine by nodeId. odi-opcua-out forwards engine writes
- * as typed write msgs ({ topic: "<nodeId>;datatype=<T>", action:"write" }).
+ * odi-opcua-sub drives tag reads in one of two update modes:
+ *   subscribe (default) — one subscribe msg per tag ({ topic: nodeId,
+ *     interval: scanRateMs }); the client node queues them while
+ *     connecting and auto-resubscribes after reconnects.
+ *   poll — registers the channel's tags as a batched read list on the
+ *     client, then triggers a readmultiple at the channel's fastest
+ *     effective scan rate.
+ * The client broadcasts inbound msgs to every in-bridge of the group;
+ * each routes to its channel's tag engine by nodeId. odi-opcua-out
+ * forwards engine writes as typed write msgs
+ * ({ topic: "<nodeId>;datatype=<T>", action:"write" }).
  *
  * Channel settings:
  *   endpointUrl     opc.tcp://host:port (default opc.tcp://127.0.0.1:49320)
- *   securityPolicy  None | Basic128Rsa15 | Basic256 | Basic256Sha256
- *   securityMode    None | Sign | SignAndEncrypt
+ *   securityPolicy  None | Basic128Rsa15 | Basic256 | Basic256Sha256 |
+ *                   Aes128_Sha256_RsaOaep | Aes256_Sha256_RsaPss (default None)
+ *   securityMode    None | Sign | SignAndEncrypt (default None)
+ *   authType        anonymous (default) | username | certificate
+ *   username        authType=username: user name (stored as a Node-RED
+ *   password        credential on the endpoint node, encrypted at rest)
+ *   userCertificateFile   authType=certificate: user cert file path
+ *   userPrivateKeyFile    authType=certificate: private key file path
+ *   clientCertificateFile transport cert for Sign/SignAndEncrypt (default:
+ *   clientPrivateKeyFile  the client's auto-generated self-signed cert)
+ *   updateMode      subscribe (default) | poll
+ *   keepSessionAlive  re-establish dropped sessions (default true)
+ *   applicationName client application name presented to the server
  *   publishIntervalMs  subscription publishing interval (default 500)
  * ------------------------------------------------------------------ */
 
-function opcuaEndpointNodeId(channelId: string): string {
-  return `odi-opcua-ep-${channelId}`;
+function opcuaEndpointNodeId(groupId: string): string {
+  return `odi-opcua-ep-${groupId}`;
 }
-function opcuaClientNodeId(channelId: string): string {
-  return `odi-opcua-client-${channelId}`;
+function opcuaClientNodeId(groupId: string): string {
+  return `odi-opcua-client-${groupId}`;
 }
 function opcuaSubNodeId(channelId: string): string {
   return `odi-opcua-sub-${channelId}`;
 }
-function opcuaInNodeId(channelId: string): string {
-  return `odi-opcua-in-${channelId}`;
+function opcuaInNodeId(groupId: string): string {
+  return `odi-opcua-in-${groupId}`;
 }
 function opcuaOutNodeId(channelId: string): string {
   return `odi-opcua-out-${channelId}`;
 }
-function opcuaStatusNodeId(channelId: string): string {
-  return `odi-opcua-status-${channelId}`;
+function opcuaStatusNodeId(groupId: string): string {
+  return `odi-opcua-status-${groupId}`;
 }
 
 function isOpcUaAddress(address: string): boolean {
   return /^ns=\d+;[isgb]=/i.test(address.trim());
 }
 
-function opcuaChannelNodes(
-  channel: ProjectConfig["channels"][number],
-  hasWritableTags: boolean,
-): NodeRedNode[] {
-  const s = channel.settings as {
-    endpointUrl?: string;
-    securityPolicy?: string;
-    securityMode?: string;
-    publishIntervalMs?: number;
-  };
-  const endpointId = opcuaEndpointNodeId(channel.id);
-  const clientId = opcuaClientNodeId(channel.id);
-  const inId = opcuaInNodeId(channel.id);
+interface OpcUaChannelSettings {
+  endpointUrl?: string;
+  securityPolicy?: string;
+  securityMode?: string;
+  authType?: string;
+  username?: string;
+  password?: string;
+  userCertificateFile?: string;
+  userPrivateKeyFile?: string;
+  clientCertificateFile?: string;
+  clientPrivateKeyFile?: string;
+  updateMode?: string;
+  keepSessionAlive?: boolean;
+  applicationName?: string;
+  publishIntervalMs?: number;
+}
 
-  const publish =
-    typeof s.publishIntervalMs === "number" && s.publishIntervalMs >= 100 ? s.publishIntervalMs : 500;
+function opcuaAuthType(s: OpcUaChannelSettings): "anonymous" | "username" | "certificate" {
+  // "username" is implied when a username is set even if authType was left
+  // unset (e.g. hand-edited configs).
+  if (s.authType === "username" || s.authType === "certificate") return s.authType;
+  return s.username ? "username" : "anonymous";
+}
+
+/**
+ * Everything that defines a distinct server connection. Channels with the
+ * same key share one endpoint config node and one client session — a
+ * converted project can have 100+ channels all pointing at the same
+ * server, and one session per channel blows past server session limits
+ * (the server starts dropping connections: BadConnectionClosed).
+ */
+function opcuaConnectionKey(s: OpcUaChannelSettings): string {
+  return [
+    s.endpointUrl ?? "opc.tcp://127.0.0.1:49320",
+    s.securityPolicy ?? "None",
+    s.securityMode ?? "None",
+    opcuaAuthType(s),
+    s.username ?? "",
+    s.password ?? "",
+    s.userCertificateFile ?? "",
+    s.userPrivateKeyFile ?? "",
+    s.clientCertificateFile ?? "",
+    s.clientPrivateKeyFile ?? "",
+    s.applicationName ?? "",
+    String(s.keepSessionAlive ?? true),
+  ].join("|");
+}
+
+/** Stable short id for a connection group (djb2, base36). */
+function opcuaGroupId(key: string): string {
+  let h = 5381;
+  for (let i = 0; i < key.length; i++) h = ((h << 5) + h + key.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function opcuaPublishInterval(channels: OpcUaChannelSettings[]): number {
+  let min = Infinity;
+  for (const s of channels) {
+    if (typeof s.publishIntervalMs === "number" && s.publishIntervalMs >= 100 && s.publishIntervalMs < min) {
+      min = s.publishIntervalMs;
+    }
+  }
+  return min === Infinity ? 500 : min;
+}
+
+/**
+ * Nodes for one connection group: a shared endpoint + client session, one
+ * in-bridge routing values across the whole group (tag addresses embed the
+ * channel name, so a single router is unambiguous — and avoids broadcasting
+ * every value msg to dozens of per-channel nodes), then per channel a sub
+ * bridge (drives reads) and an out bridge (writes). One status watcher
+ * marks every channel of the group bad on connection loss.
+ */
+function opcuaGroupNodes(
+  channels: { channel: ProjectConfig["channels"][number]; hasWritableTags: boolean }[],
+): NodeRedNode[] {
+  const settings = channels.map((c) => c.channel.settings as OpcUaChannelSettings);
+  const s = settings[0];
+  const groupId = opcuaGroupId(opcuaConnectionKey(s));
+  const endpointId = opcuaEndpointNodeId(groupId);
+  const clientId = opcuaClientNodeId(groupId);
+  const inId = opcuaInNodeId(groupId);
+  const channelIds = channels.map((c) => c.channel.id);
+  const authType = opcuaAuthType(s);
+  const publish = opcuaPublishInterval(settings);
+  const label = s.endpointUrl ?? "opc.tcp://127.0.0.1:49320";
 
   const nodes: NodeRedNode[] = [
     {
       id: endpointId,
       type: "OpcUa-Endpoint",
       z: ODI_TAB_ID,
-      name: `${channel.name} endpoint`,
-      endpoint: s.endpointUrl ?? "opc.tcp://127.0.0.1:49320",
+      name: `${label} endpoint`,
+      endpoint: label,
       secpol: s.securityPolicy ?? "None",
       secmode: s.securityMode ?? "None",
-      login: false,
-      none: true,
-      usercert: false,
-      usercertificate: "",
-      userprivatekey: "",
+      login: authType === "username",
+      none: authType === "anonymous",
+      usercert: authType === "certificate",
+      usercertificate: authType === "certificate" ? (s.userCertificateFile ?? "") : "",
+      userprivatekey: authType === "certificate" ? (s.userPrivateKeyFile ?? "") : "",
+      // Node-RED extracts inline credentials during setFlows and stores them
+      // encrypted (flows_cred.json), never in the flow file itself.
+      ...(authType === "username"
+        ? { credentials: { user: s.username ?? "", password: s.password ?? "" } }
+        : {}),
     },
     {
       id: clientId,
       type: "OpcUa-Client",
       z: ODI_TAB_ID,
-      name: channel.name,
+      name: label,
       endpoint: endpointId,
       action: "subscribe",
       time: String(publish),
       timeUnit: "ms",
-      certificate: "n",
-      localfile: "",
-      localkeyfile: "",
+      // "l" = local certificate file (transport cert for Sign/SignAndEncrypt);
+      // "n" = let the client use its auto-generated self-signed certificate.
+      certificate: s.clientCertificateFile ? "l" : "n",
+      localfile: s.clientCertificateFile ?? "",
+      localkeyfile: s.clientPrivateKeyFile ?? "",
       useTransport: false,
-      keepsessionalive: true,
+      keepsessionalive: s.keepSessionAlive ?? true,
+      applicationName: s.applicationName ?? "",
       wires: [[inId], [inId], []],
     },
     {
-      id: opcuaSubNodeId(channel.id),
-      type: "odi-opcua-sub",
+      id: opcuaStatusNodeId(groupId),
+      type: "status",
       z: ODI_TAB_ID,
-      name: `sub:${channel.name}`,
-      channelId: channel.id,
-      wires: [[clientId]],
+      name: `link:${label}`,
+      scope: [clientId],
+      wires: [[inId]],
     },
     {
       id: inId,
       type: "odi-opcua-in",
       z: ODI_TAB_ID,
-      name: `in:${channel.name}`,
-      channelId: channel.id,
+      name: `in:${label}`,
+      channelIds,
       wires: [],
-    },
-    {
-      id: opcuaStatusNodeId(channel.id),
-      type: "status",
-      z: ODI_TAB_ID,
-      name: `link:${channel.name}`,
-      scope: [clientId],
-      wires: [[inId]],
     },
   ];
 
-  if (hasWritableTags) {
+  for (const { channel, hasWritableTags } of channels) {
+    const cs = channel.settings as OpcUaChannelSettings;
     nodes.push({
-      id: opcuaOutNodeId(channel.id),
-      type: "odi-opcua-out",
+      id: opcuaSubNodeId(channel.id),
+      type: "odi-opcua-sub",
       z: ODI_TAB_ID,
-      name: `out:${channel.name}`,
+      name: `sub:${channel.name}`,
       channelId: channel.id,
+      updateMode: cs.updateMode === "poll" ? "poll" : "subscribe",
       wires: [[clientId]],
     });
+    if (hasWritableTags) {
+      nodes.push({
+        id: opcuaOutNodeId(channel.id),
+        type: "odi-opcua-out",
+        z: ODI_TAB_ID,
+        name: `out:${channel.name}`,
+        channelId: channel.id,
+        wires: [[clientId]],
+      });
+    }
   }
   return nodes;
 }
@@ -636,15 +735,22 @@ export function generateFlows(project: ProjectConfig): NodeRedNode[] {
     }
   }
 
-  // OPC UA client channels: one endpoint + client per channel; the odi-opcua-*
-  // bridge nodes handle subscription, inbound routing and writes per channel.
+  // OPC UA client channels: one shared endpoint + client session per unique
+  // connection (endpointUrl + security + auth + certs); the odi-opcua-*
+  // bridge nodes stay per channel.
+  const opcuaGroups = new Map<string, { channel: ProjectConfig["channels"][number]; hasWritableTags: boolean }[]>();
   for (const channel of project.channels) {
     if (!channel.enabled || channel.driver !== "opcua-client") continue;
     const devices = project.devices.filter((d) => d.channelId === channel.id && d.enabled);
     const tags = devices.flatMap((d) => tagsByDevice.get(d.id) ?? []);
     const valid = tags.filter((t) => isOpcUaAddress(t.address));
     if (valid.length === 0) continue;
-    nodes.push(...opcuaChannelNodes(channel, valid.some((t) => t.access === "rw")));
+    const key = opcuaConnectionKey(channel.settings as OpcUaChannelSettings);
+    if (!opcuaGroups.has(key)) opcuaGroups.set(key, []);
+    opcuaGroups.get(key)!.push({ channel, hasWritableTags: valid.some((t) => t.access === "rw") });
+  }
+  for (const group of opcuaGroups.values()) {
+    nodes.push(...opcuaGroupNodes(group));
   }
 
   return nodes;

@@ -1,16 +1,21 @@
 /**
  * odi-opcua-in — ODIServer OPC UA inbound bridge.
  *
- * Receives everything an OpcUa-Client node (and its status watcher) emits
- * and routes it into the tag engine:
+ * One instance per connection group (node config channelIds: string[]).
+ * Receives everything the group's shared OpcUa-Client node (and its status
+ * watcher) emits and routes it into the tag engine:
  *   - value msgs   { topic: <nodeId>, payload, statusCode } — the nodeId is
- *                  mapped to a tag via the channel's tag addresses; bad
- *                  statusCodes become bad quality instead of values
+ *                  mapped to a tag via the group channels' tag addresses;
+ *                  bad statusCodes become bad quality instead of values
  *   - error msgs   { error, endpoint } (no topic) — endpoint-level failures
- *                  mark every tag of the channel bad
+ *                  mark every tag of the group bad
  *   - status msgs  { status: { text } } from a status node scoped to the
- *                  client — connection-loss texts mark the channel bad
+ *                  client — connection-loss texts mark the group bad
  *                  (recovery comes from subscription updates)
+ *
+ * Tag addresses embed the channel name (ns=2;s=Channel.Device.Tag), so a
+ * single router per group is unambiguous — and avoids broadcasting every
+ * value msg to dozens of per-channel nodes.
  */
 module.exports = function (RED) {
   'use strict'
@@ -53,7 +58,11 @@ module.exports = function (RED) {
   function OdiOpcUaInNode(config) {
     RED.nodes.createNode(this, config)
     const node = this
-    node.channelId = config.channelId
+    const channelIds = Array.isArray(config.channelIds) && config.channelIds.length > 0
+      ? config.channelIds
+      : config.channelId
+        ? [config.channelId]
+        : []
 
     const runtime = RED.settings.odiRuntime
     if (!runtime || !runtime.engine || !runtime.store) {
@@ -62,22 +71,36 @@ module.exports = function (RED) {
     }
     const { engine, store } = runtime
 
-    // nodeId (tag address) -> tagId, rebuilt when the config changes.
+    // nodeId (tag address) -> tagId across the whole group, rebuilt when
+    // the config changes.
     let byAddress = null
     function addressIndex() {
       if (byAddress) return byAddress
       byAddress = new Map()
-      for (const device of store.listDevices(node.channelId)) {
-        for (const tag of store.listTags(device.id)) byAddress.set(tag.address, tag.id)
+      for (const channelId of channelIds) {
+        for (const device of store.listDevices(channelId)) {
+          for (const tag of store.listTags(device.id)) byAddress.set(tag.address, tag.id)
+        }
       }
       return byAddress
     }
-    const onConfigChange = () => { byAddress = null }
+    const onConfigChange = () => { byAddress = null; deviceIds = null }
     store.on('change', onConfigChange)
 
-    function markChannelBad(reason) {
-      for (const device of store.listDevices(node.channelId)) {
-        engine.setQualityForDevice(device.id, 'bad', reason)
+    // Device ids of the group, rebuilt when the config changes — error
+    // floods would otherwise re-query the store per message.
+    let deviceIds = null
+    function groupDeviceIds() {
+      if (deviceIds) return deviceIds
+      deviceIds = channelIds.flatMap((channelId) =>
+        store.listDevices(channelId).map((d) => d.id),
+      )
+      return deviceIds
+    }
+
+    function markGroupBad(reason) {
+      for (const deviceId of groupDeviceIds()) {
+        engine.setQualityForDevice(deviceId, 'bad', reason)
       }
     }
 
@@ -86,19 +109,19 @@ module.exports = function (RED) {
         // Status watcher msgs: { status: { text } }, no topic.
         if (!msg.topic && msg.status && msg.status.text !== undefined) {
           const text = String(msg.status.text)
-          if (BAD_STATUS.test(text)) markChannelBad('OPC UA connection: ' + text)
+          if (BAD_STATUS.test(text)) markGroupBad('OPC UA connection: ' + text)
           return
         }
         // Endpoint-level errors: { error }, no topic.
         if (!msg.topic && msg.error) {
           const errMsg = msg.error.message ? String(msg.error.message) : String(msg.error)
-          markChannelBad(errMsg)
+          markGroupBad(errMsg)
           return
         }
         if (!msg.topic || typeof msg.topic !== 'string') return
         const address = msg.topic.split(';datatype=')[0]
         const tagId = addressIndex().get(address)
-        if (!tagId) return // tag not in this channel (or removed)
+        if (!tagId) return // tag not in this group (or removed)
 
         if (msg.error) {
           const errMsg = msg.error.message ? String(msg.error.message) : String(msg.error)

@@ -322,57 +322,89 @@ function opcuaProject(tagAccess: "ro" | "rw" = "ro"): ProjectConfig {
   return {
     channels: [
       {
-        id: "kep1",
+        id: "ch1",
         name: "Site A",
         driver: "opcua-client",
         enabled: true,
         settings: { endpointUrl: "opc.tcp://127.0.0.1:49320" },
       },
-      { id: "kep2", name: "Disabled", driver: "opcua-client", enabled: false, settings: {} },
+      { id: "ch2", name: "Disabled", driver: "opcua-client", enabled: false, settings: {} },
     ],
     devices: [
-      { id: "kep1.dev1", channelId: "kep1", name: "PLC-01", enabled: true, settings: {} },
-      { id: "kep2.dev1", channelId: "kep2", name: "PLC-02", enabled: true, settings: {} },
+      { id: "ch1.dev1", channelId: "ch1", name: "PLC-01", enabled: true, settings: {} },
+      { id: "ch2.dev1", channelId: "ch2", name: "PLC-02", enabled: true, settings: {} },
     ],
     tags: [
-      { id: "kep1.dev1.t1", deviceId: "kep1.dev1", name: "Voltage", address: "ns=2;s=Site A.PLC-01.Voltage", dataType: "float32", byteOrder: "big-endian", access: tagAccess, scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
-      { id: "kep1.dev1.bad", deviceId: "kep1.dev1", name: "NotOpcUa", address: "40001", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
-      { id: "kep2.dev1.t1", deviceId: "kep2.dev1", name: "OnDisabledChannel", address: "ns=2;s=Disabled.PLC-02.X", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+      { id: "ch1.dev1.t1", deviceId: "ch1.dev1", name: "Voltage", address: "ns=2;s=Site A.PLC-01.Voltage", dataType: "float32", byteOrder: "big-endian", access: tagAccess, scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+      { id: "ch1.dev1.bad", deviceId: "ch1.dev1", name: "NotOpcUa", address: "40001", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
+      { id: "ch2.dev1.t1", deviceId: "ch2.dev1", name: "OnDisabledChannel", address: "ns=2;s=Disabled.PLC-02.X", dataType: "uint16", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" },
     ],
     mqttAgents: [],
   };
 }
 
 describe("opcua-client channels", () => {
-  it("creates endpoint + client + bridges per enabled channel with valid tags", () => {
+  it("creates a shared endpoint + client plus per-channel bridges", () => {
     const flows = generateFlows(opcuaProject());
     const endpoint = flows.find((n) => n.type === "OpcUa-Endpoint")!;
-    expect(endpoint).toMatchObject({ id: "odi-opcua-ep-kep1", endpoint: "opc.tcp://127.0.0.1:49320", secpol: "None", secmode: "None" });
+    expect(endpoint).toMatchObject({ endpoint: "opc.tcp://127.0.0.1:49320", secpol: "None", secmode: "None" });
     const client = flows.find((n) => n.type === "OpcUa-Client")!;
-    expect(client).toMatchObject({ id: "odi-opcua-client-kep1", endpoint: "odi-opcua-ep-kep1", action: "subscribe" });
-    expect(flows.find((n) => n.id === "odi-opcua-sub-kep1")).toMatchObject({ type: "odi-opcua-sub", channelId: "kep1", wires: [["odi-opcua-client-kep1"]] });
-    expect(flows.find((n) => n.id === "odi-opcua-in-kep1")).toMatchObject({ type: "odi-opcua-in", channelId: "kep1" });
-    expect(client.wires).toEqual([["odi-opcua-in-kep1"], ["odi-opcua-in-kep1"], []]);
-    // only one channel has valid tags (kep2 disabled; kep1 also has a non-OPC address tag)
+    expect(client).toMatchObject({ endpoint: endpoint.id, action: "subscribe" });
+    expect(flows.find((n) => n.id === "odi-opcua-sub-ch1")).toMatchObject({ type: "odi-opcua-sub", channelId: "ch1", wires: [[client.id]] });
+    const inBridge = flows.find((n) => n.type === "odi-opcua-in")!;
+    expect(inBridge).toMatchObject({ channelIds: ["ch1"] });
+    expect(client.wires).toEqual([[inBridge.id], [inBridge.id], []]);
+    // only one channel has valid tags (ch2 disabled; ch1 also has a non-OPC address tag)
     expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(1);
   });
 
   it("watches the client node status for connection loss", () => {
     const flows = generateFlows(opcuaProject());
-    expect(flows.find((n) => n.id === "odi-opcua-status-kep1")).toMatchObject({
+    const client = flows.find((n) => n.type === "OpcUa-Client")!;
+    const inBridge = flows.find((n) => n.type === "odi-opcua-in")!;
+    expect(flows.find((n) => n.type === "status")).toMatchObject({
       type: "status",
-      scope: ["odi-opcua-client-kep1"],
-      wires: [["odi-opcua-in-kep1"]],
+      scope: [client.id],
+      wires: [[inBridge.id]],
     });
+  });
+
+  it("shares one client session across channels with the same connection", () => {
+    const p = opcuaProject();
+    p.channels.push({ id: "ch3", name: "Site A duplicate", driver: "opcua-client", enabled: true, settings: { endpointUrl: "opc.tcp://127.0.0.1:49320" } });
+    p.devices.push({ id: "ch3.dev1", channelId: "ch3", name: "PLC-03", enabled: true, settings: {} });
+    p.tags.push({ id: "ch3.dev1.t1", deviceId: "ch3.dev1", name: "Flow", address: "ns=2;s=Site A.PLC-03.Flow", dataType: "float32", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" });
+    const flows = generateFlows(p);
+    expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(1);
+    expect(flows.filter((n) => n.type === "OpcUa-Endpoint")).toHaveLength(1);
+    const client = flows.find((n) => n.type === "OpcUa-Client")!;
+    // one in-bridge routes values for the whole group
+    const inBridges = flows.filter((n) => n.type === "odi-opcua-in");
+    expect(inBridges).toHaveLength(1);
+    expect(inBridges[0]).toMatchObject({ channelIds: ["ch1", "ch3"] });
+    expect(client.wires[0]).toEqual([inBridges[0].id]);
+    // each channel still gets its own sub bridge into the shared client
+    expect(flows.find((n) => n.id === "odi-opcua-sub-ch3")).toMatchObject({ wires: [[client.id]] });
+  });
+
+  it("uses separate sessions for channels with different endpoints", () => {
+    const p = opcuaProject();
+    p.channels.push({ id: "ch3", name: "Site B", driver: "opcua-client", enabled: true, settings: { endpointUrl: "opc.tcp://10.0.0.9:4840" } });
+    p.devices.push({ id: "ch3.dev1", channelId: "ch3", name: "PLC-03", enabled: true, settings: {} });
+    p.tags.push({ id: "ch3.dev1.t1", deviceId: "ch3.dev1", name: "Flow", address: "ns=2;s=Site B.PLC-03.Flow", dataType: "float32", byteOrder: "big-endian", access: "ro", scanRateMs: 1000, deadband: 0, scaling: { enabled: false, type: "linear", rawMin: 0, rawMax: 100, engMin: 0, engMax: 100, clampLow: false, clampHigh: false, negate: false }, mqtt: {}, description: "" });
+    const flows = generateFlows(p);
+    expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(2);
+    expect(flows.filter((n) => n.type === "OpcUa-Endpoint")).toHaveLength(2);
   });
 
   it("adds the write bridge only when the channel has rw tags", () => {
     expect(generateFlows(opcuaProject("ro")).filter((n) => n.type === "odi-opcua-out")).toHaveLength(0);
     const rw = generateFlows(opcuaProject("rw"));
-    expect(rw.find((n) => n.id === "odi-opcua-out-kep1")).toMatchObject({
+    const client = rw.find((n) => n.type === "OpcUa-Client")!;
+    expect(rw.find((n) => n.id === "odi-opcua-out-ch1")).toMatchObject({
       type: "odi-opcua-out",
-      channelId: "kep1",
-      wires: [["odi-opcua-client-kep1"]],
+      channelId: "ch1",
+      wires: [[client.id]],
     });
   });
 
@@ -381,5 +413,83 @@ describe("opcua-client channels", () => {
     p.tags = p.tags.filter((t) => !t.address.startsWith("ns="));
     const flows = generateFlows(p);
     expect(flows.filter((n) => n.type === "OpcUa-Client")).toHaveLength(0);
+  });
+
+  it("maps security policy/mode and username auth onto the endpoint node", () => {
+    const p = opcuaProject();
+    p.channels[0].settings = {
+      endpointUrl: "opc.tcp://10.20.112.115:49320",
+      securityPolicy: "Basic256",
+      securityMode: "Sign",
+      authType: "username",
+      username: "scada",
+      password: "secret",
+    };
+    const endpoint = generateFlows(p).find((n) => n.type === "OpcUa-Endpoint")!;
+    expect(endpoint).toMatchObject({
+      endpoint: "opc.tcp://10.20.112.115:49320",
+      secpol: "Basic256",
+      secmode: "Sign",
+      login: true,
+      none: false,
+      usercert: false,
+      credentials: { user: "scada", password: "secret" },
+    });
+  });
+
+  it("defaults to anonymous auth with no inline credentials", () => {
+    const endpoint = generateFlows(opcuaProject()).find((n) => n.type === "OpcUa-Endpoint")!;
+    expect(endpoint).toMatchObject({ login: false, none: true, usercert: false });
+    expect(endpoint.credentials).toBeUndefined();
+  });
+
+  it("infers username auth when a username is set without authType", () => {
+    const p = opcuaProject();
+    p.channels[0].settings = { username: "scada", password: "secret" };
+    const endpoint = generateFlows(p).find((n) => n.type === "OpcUa-Endpoint")!;
+    expect(endpoint).toMatchObject({ login: true, none: false });
+  });
+
+  it("maps certificate auth onto the endpoint node", () => {
+    const p = opcuaProject();
+    p.channels[0].settings = {
+      authType: "certificate",
+      securityPolicy: "Basic256Sha256",
+      securityMode: "SignAndEncrypt",
+      userCertificateFile: "C:\\certs\\client.der",
+      userPrivateKeyFile: "C:\\certs\\client.pem",
+    };
+    const endpoint = generateFlows(p).find((n) => n.type === "OpcUa-Endpoint")!;
+    expect(endpoint).toMatchObject({
+      secpol: "Basic256Sha256",
+      secmode: "SignAndEncrypt",
+      login: false,
+      none: false,
+      usercert: true,
+      usercertificate: "C:\\certs\\client.der",
+      userprivatekey: "C:\\certs\\client.pem",
+    });
+    expect(endpoint.credentials).toBeUndefined();
+  });
+
+  it("uses a local transport certificate when client cert files are set", () => {
+    const p = opcuaProject();
+    p.channels[0].settings = {
+      securityPolicy: "Basic256",
+      securityMode: "Sign",
+      clientCertificateFile: "C:\\pki\\client_certificate.pem",
+      clientPrivateKeyFile: "C:\\pki\\private_key.pem",
+    };
+    const client = generateFlows(p).find((n) => n.type === "OpcUa-Client")!;
+    expect(client).toMatchObject({
+      certificate: "l",
+      localfile: "C:\\pki\\client_certificate.pem",
+      localkeyfile: "C:\\pki\\private_key.pem",
+    });
+  });
+
+  it("falls back to the auto-generated self-signed certificate", () => {
+    const client = generateFlows(opcuaProject()).find((n) => n.type === "OpcUa-Client")!;
+    expect(client).toMatchObject({ certificate: "n", localfile: "", localkeyfile: "" });
   });
 });

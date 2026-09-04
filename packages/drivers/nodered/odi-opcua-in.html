@@ -4,7 +4,8 @@
     color: '#2d6a7c',
     defaults: {
       name: { value: '' },
-      channelId: { value: '' }
+      channelId: { value: '' },
+      channelIds: { value: [] }
     },
     inputs: 1,
     outputs: 0,
@@ -27,7 +28,8 @@
 </script>
 
 <script type="text/html" data-help-name="odi-opcua-in">
-  <p>Routes OpcUa-Client subscription messages into the ODIServer tag engine,
-  mapping msg.topic (nodeId) to the channel's tag addresses. Endpoint errors
-  and connection-loss status texts mark the channel's tags bad.</p>
+  <p>Routes OpcUa-Client messages into the ODIServer tag engine, mapping
+  msg.topic (nodeId) to tag addresses across the configured channel group.
+  Endpoint errors and connection-loss status texts mark the group's tags
+  bad.</p>
 </script>

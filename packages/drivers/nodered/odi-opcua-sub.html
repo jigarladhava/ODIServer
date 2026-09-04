@@ -4,7 +4,8 @@
     color: '#2d6a7c',
     defaults: {
       name: { value: '' },
-      channelId: { value: '' }
+      channelId: { value: '' },
+      updateMode: { value: 'subscribe' }
     },
     inputs: 0,
     outputs: 1,
@@ -24,9 +25,17 @@
     <label for="node-input-channelId"><i class="fa fa-tag"></i> Channel ID</label>
     <input type="text" id="node-input-channelId" placeholder="channel id">
   </div>
+  <div class="form-row">
+    <label for="node-input-updateMode"><i class="fa fa-tag"></i> Update Mode</label>
+    <select id="node-input-updateMode">
+      <option value="subscribe">Subscribe (on data change)</option>
+      <option value="poll">Poll (batched read)</option>
+    </select>
+  </div>
 </script>
 
 <script type="text/html" data-help-name="odi-opcua-sub">
-  <p>Emits one OPC UA subscribe message per tag of the configured channel into
-  the wired OpcUa-Client node at deploy time.</p>
+  <p>Drives tag reads for the configured channel through the wired
+  OpcUa-Client node: one subscribe message per tag (subscribe mode), or a
+  batched read at the channel's fastest scan rate (poll mode).</p>
 </script>

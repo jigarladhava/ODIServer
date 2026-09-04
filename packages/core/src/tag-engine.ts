@@ -41,6 +41,8 @@ interface RuntimeTag {
  */
 export class TagEngine extends EventEmitter {
   private tags = new Map<string, RuntimeTag>();
+  /** deviceId -> its tag ids, so device-wide quality marks are O(device tags). */
+  private byDevice = new Map<string, Set<string>>();
 
   constructor() {
     super();
@@ -48,9 +50,26 @@ export class TagEngine extends EventEmitter {
     this.setMaxListeners(0);
   }
 
+  private index(config: TagConfig): void {
+    let set = this.byDevice.get(config.deviceId);
+    if (!set) {
+      set = new Set();
+      this.byDevice.set(config.deviceId, set);
+    }
+    set.add(config.id);
+  }
+
+  private unindex(tagId: string, deviceId: string): void {
+    const set = this.byDevice.get(deviceId);
+    if (!set) return;
+    set.delete(tagId);
+    if (set.size === 0) this.byDevice.delete(deviceId);
+  }
+
   /** Load/replace the full tag set (e.g. after config load). Existing values are kept by id. */
   load(configs: TagConfig[]): void {
     const next = new Map<string, RuntimeTag>();
+    this.byDevice.clear();
     for (const config of configs) {
       const existing = this.tags.get(config.id);
       next.set(config.id, {
@@ -63,6 +82,7 @@ export class TagEngine extends EventEmitter {
         reportedValue: existing?.reportedValue ?? null,
         reportedQuality: existing?.reportedQuality ?? ("bad" as Quality),
       });
+      this.index(config);
     }
     this.tags = next;
   }
@@ -72,6 +92,8 @@ export class TagEngine extends EventEmitter {
   }
 
   removeTag(tagId: string): void {
+    const tag = this.tags.get(tagId);
+    if (tag) this.unindex(tagId, tag.config.deviceId);
     this.tags.delete(tagId);
   }
 
@@ -134,9 +156,9 @@ export class TagEngine extends EventEmitter {
 
   /** Mark every tag of a device (e.g. connection lost) — classic device-down behavior. */
   setQualityForDevice(deviceId: string, quality: Quality, error?: string): void {
-    for (const [tagId, tag] of this.tags) {
-      if (tag.config.deviceId === deviceId) this.setQuality(tagId, quality, error);
-    }
+    const ids = this.byDevice.get(deviceId);
+    if (!ids) return;
+    for (const tagId of ids) this.setQuality(tagId, quality, error);
   }
 
   /** Client-initiated write. The driver layer performs the device I/O and confirms via updateRaw(). */

@@ -28,6 +28,28 @@ const DRIVERS: { value: Driver; label: string }[] = [
 
 const DATA_TYPES: DataType[] = DATA_TYPE_OPTIONS;
 
+const OPCUA_SECURITY_POLICIES = [
+  'None',
+  'Basic128Rsa15',
+  'Basic256',
+  'Basic256Sha256',
+  'Aes128_Sha256_RsaOaep',
+  'Aes256_Sha256_RsaPss',
+];
+
+const OPCUA_SECURITY_MODES = ['None', 'Sign', 'SignAndEncrypt'];
+
+const OPCUA_AUTH_TYPES: { value: string; label: string }[] = [
+  { value: 'anonymous', label: 'Anonymous' },
+  { value: 'username', label: 'Username & Password' },
+  { value: 'certificate', label: 'Certificate' },
+];
+
+const OPCUA_UPDATE_MODES: { value: string; label: string }[] = [
+  { value: 'subscribe', label: 'Subscribe (on data change)' },
+  { value: 'poll', label: 'Poll (batched read)' },
+];
+
 function Row({
   label,
   htmlFor,
@@ -134,10 +156,42 @@ function useSave(onSaved: () => void) {
 }
 
 function ChannelEditor({ entity, onSaved }: { entity: Channel; onSaved: () => void }) {
+  const settings = entity.settings as {
+    endpointUrl?: string;
+    securityPolicy?: string;
+    securityMode?: string;
+    authType?: string;
+    username?: string;
+    password?: string;
+    userCertificateFile?: string;
+    userPrivateKeyFile?: string;
+    clientCertificateFile?: string;
+    clientPrivateKeyFile?: string;
+    updateMode?: string;
+    keepSessionAlive?: boolean;
+    applicationName?: string;
+    publishIntervalMs?: number;
+  };
   const [name, setName] = useState(entity.name);
   const [driver, setDriver] = useState<Driver>(entity.driver);
   const [enabled, setEnabled] = useState(entity.enabled);
+  const [endpointUrl, setEndpointUrl] = useState(settings.endpointUrl ?? '');
+  const [securityPolicy, setSecurityPolicy] = useState(settings.securityPolicy ?? 'None');
+  const [securityMode, setSecurityMode] = useState(settings.securityMode ?? 'None');
+  const [authType, setAuthType] = useState(settings.authType ?? 'anonymous');
+  const [username, setUsername] = useState(settings.username ?? '');
+  const [password, setPassword] = useState(settings.password ?? '');
+  const [userCertificateFile, setUserCertificateFile] = useState(settings.userCertificateFile ?? '');
+  const [userPrivateKeyFile, setUserPrivateKeyFile] = useState(settings.userPrivateKeyFile ?? '');
+  const [clientCertificateFile, setClientCertificateFile] = useState(settings.clientCertificateFile ?? '');
+  const [clientPrivateKeyFile, setClientPrivateKeyFile] = useState(settings.clientPrivateKeyFile ?? '');
+  const [updateMode, setUpdateMode] = useState(settings.updateMode ?? 'subscribe');
+  const [keepSessionAlive, setKeepSessionAlive] = useState(settings.keepSessionAlive ?? true);
+  const [applicationName, setApplicationName] = useState(settings.applicationName ?? '');
+  const [publishIntervalMs, setPublishIntervalMs] = useState(String(settings.publishIntervalMs ?? 500));
   const { busy, error, saved, save } = useSave(onSaved);
+
+  const isOpcUa = driver === 'opcua-client';
 
   return (
     <EditorShell
@@ -147,8 +201,25 @@ function ChannelEditor({ entity, onSaved }: { entity: Channel; onSaved: () => vo
       saved={saved}
       onSubmit={(e) => {
         e.preventDefault();
+        const nextSettings: Record<string, unknown> = { ...entity.settings };
+        if (isOpcUa) {
+          nextSettings.endpointUrl = endpointUrl.trim();
+          nextSettings.securityPolicy = securityPolicy;
+          nextSettings.securityMode = securityMode;
+          nextSettings.authType = authType;
+          nextSettings.username = authType === 'username' ? username.trim() : undefined;
+          nextSettings.password = authType === 'username' ? password : undefined;
+          nextSettings.userCertificateFile = authType === 'certificate' ? userCertificateFile.trim() : undefined;
+          nextSettings.userPrivateKeyFile = authType === 'certificate' ? userPrivateKeyFile.trim() : undefined;
+          nextSettings.clientCertificateFile = securityMode !== 'None' ? clientCertificateFile.trim() : undefined;
+          nextSettings.clientPrivateKeyFile = securityMode !== 'None' ? clientPrivateKeyFile.trim() : undefined;
+          nextSettings.updateMode = updateMode;
+          nextSettings.keepSessionAlive = keepSessionAlive;
+          nextSettings.applicationName = applicationName.trim() || undefined;
+          nextSettings.publishIntervalMs = Number(publishIntervalMs);
+        }
         void save(() =>
-          updateEntity('channel', entity.id, { ...entity, name: name.trim(), driver, enabled }),
+          updateEntity('channel', entity.id, { ...entity, name: name.trim(), driver, enabled, settings: nextSettings }),
         );
       }}
     >
@@ -187,6 +258,190 @@ function ChannelEditor({ entity, onSaved }: { entity: Channel; onSaved: () => vo
           className="h-3.5 w-3.5 accent-accent"
         />
       </Row>
+      {isOpcUa && (
+        <>
+          <Row label="Endpoint URL" htmlFor="ed-channel-endpoint">
+            <input
+              id="ed-channel-endpoint"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="opc.tcp://host:49320"
+              value={endpointUrl}
+              onChange={(e) => setEndpointUrl(e.target.value)}
+              className={monoClass}
+            />
+          </Row>
+          <Row label="Security Policy" htmlFor="ed-channel-secpol">
+            <select
+              id="ed-channel-secpol"
+              value={securityPolicy}
+              onChange={(e) => setSecurityPolicy(e.target.value)}
+              className={selectClass}
+            >
+              {OPCUA_SECURITY_POLICIES.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Security Mode" htmlFor="ed-channel-secmode">
+            <select
+              id="ed-channel-secmode"
+              value={securityMode}
+              onChange={(e) => setSecurityMode(e.target.value)}
+              className={selectClass}
+            >
+              {OPCUA_SECURITY_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Authentication" htmlFor="ed-channel-auth">
+            <select
+              id="ed-channel-auth"
+              value={authType}
+              onChange={(e) => setAuthType(e.target.value)}
+              className={selectClass}
+            >
+              {OPCUA_AUTH_TYPES.map((a) => (
+                <option key={a.value} value={a.value}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </Row>
+          {authType === 'username' && (
+            <>
+              <Row label="Username" htmlFor="ed-channel-username">
+                <input
+                  id="ed-channel-username"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="Password" htmlFor="ed-channel-password">
+                <input
+                  id="ed-channel-password"
+                  type="password"
+                  autoComplete="off"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+            </>
+          )}
+          {authType === 'certificate' && (
+            <>
+              <Row label="Certificate File" htmlFor="ed-channel-usercert">
+                <input
+                  id="ed-channel-usercert"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="C:\certs\client.der"
+                  value={userCertificateFile}
+                  onChange={(e) => setUserCertificateFile(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="Private Key File" htmlFor="ed-channel-userkey">
+                <input
+                  id="ed-channel-userkey"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="C:\certs\client.pem"
+                  value={userPrivateKeyFile}
+                  onChange={(e) => setUserPrivateKeyFile(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+            </>
+          )}
+          {securityMode !== 'None' && (
+            <>
+              <Row label="Client Cert File" htmlFor="ed-channel-clientcert">
+                <input
+                  id="ed-channel-clientcert"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="empty = auto-generated self-signed"
+                  value={clientCertificateFile}
+                  onChange={(e) => setClientCertificateFile(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+              <Row label="Client Key File" htmlFor="ed-channel-clientkey">
+                <input
+                  id="ed-channel-clientkey"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="empty = auto-generated self-signed"
+                  value={clientPrivateKeyFile}
+                  onChange={(e) => setClientPrivateKeyFile(e.target.value)}
+                  className={monoClass}
+                />
+              </Row>
+            </>
+          )}
+          <Row label="Update Mode" htmlFor="ed-channel-updatemode">
+            <select
+              id="ed-channel-updatemode"
+              value={updateMode}
+              onChange={(e) => setUpdateMode(e.target.value)}
+              className={selectClass}
+            >
+              {OPCUA_UPDATE_MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </Row>
+          <Row label="Publish Interval" htmlFor="ed-channel-publish">
+            <input
+              id="ed-channel-publish"
+              type="text"
+              inputMode="numeric"
+              value={publishIntervalMs}
+              onChange={(e) => setPublishIntervalMs(e.target.value)}
+              className={monoClass}
+            />
+          </Row>
+          <Row label="Keep-Alive" htmlFor="ed-channel-keepalive">
+            <input
+              id="ed-channel-keepalive"
+              type="checkbox"
+              checked={keepSessionAlive}
+              onChange={(e) => setKeepSessionAlive(e.target.checked)}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+          </Row>
+          <Row label="Application Name" htmlFor="ed-channel-appname">
+            <input
+              id="ed-channel-appname"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="default: ODIServer client"
+              value={applicationName}
+              onChange={(e) => setApplicationName(e.target.value)}
+              className={monoClass}
+            />
+          </Row>
+        </>
+      )}
     </EditorShell>
   );
 }

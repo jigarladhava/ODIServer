@@ -84,6 +84,15 @@ function collectTags(device: any): KepTag[] {
 const input = process.argv[2] ?? "E:\\Downloads\\Kep03-06-2026.json";
 const output = process.argv[3] ?? "odiserver-opcopc-project.json";
 const endpointUrl = process.argv[4] ?? "opc.tcp://127.0.0.1:49320";
+// Optional security overrides (many KEPServerEX installs allow no None endpoint).
+const securityPolicy = process.argv[5] ?? "None";
+const securityMode = process.argv[6] ?? "None";
+const username = process.argv[7];
+const password = process.argv[8];
+// Transport client cert for Sign/SignAndEncrypt (default: auto-generated
+// self-signed cert, which the server must then trust).
+const clientCertificateFile = process.argv[9];
+const clientPrivateKeyFile = process.argv[10];
 
 const doc = JSON.parse(readFileSync(input, "utf8").replace(/^﻿/, ""));
 const kep = doc?.project;
@@ -116,8 +125,12 @@ for (const kepChannel of kep.channels) {
     enabled: true,
     settings: {
       endpointUrl,
-      securityPolicy: "None",
-      securityMode: "None",
+      securityPolicy,
+      securityMode,
+      ...(username ? { authType: "username", username, password: password ?? "" } : {}),
+      ...(clientCertificateFile
+        ? { clientCertificateFile, clientPrivateKeyFile: clientPrivateKeyFile ?? "" }
+        : {}),
       sourceDriver,
     },
   });
