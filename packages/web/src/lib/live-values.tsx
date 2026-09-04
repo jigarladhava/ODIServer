@@ -12,6 +12,14 @@ import type { TagValue, ValueMap } from './types';
 
 export type Trend = 'up' | 'down' | 'flat';
 
+/**
+ * WS change messages are coalesced and applied at most once per this window.
+ * Chatty servers (thousands of tags flapping quality during device outages)
+ * otherwise re-render the whole app hundreds of times per second and freeze
+ * the console main thread; 200ms is well below human-perceptible latency.
+ */
+const CHANGE_FLUSH_MS = 200;
+
 interface LiveValuesContextValue {
   /** Latest known value per tag id (initial REST snapshot + WS updates). */
   values: ValueMap;
@@ -56,6 +64,18 @@ export function LiveValuesProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    let flushTimer: number | undefined;
+
+    const commitPending = () => {
+      flushTimer = undefined;
+      if (pausedRef.current) return;
+      const batch = pendingRef.current;
+      if (Object.keys(batch).length === 0) return;
+      pendingRef.current = {};
+      valuesRef.current = { ...valuesRef.current, ...batch };
+      setValues(valuesRef.current);
+    };
+
     // Initial snapshot over REST as a fallback; the WS snapshot replaces it.
     getValues()
       .then((snapshot) => {
@@ -72,18 +92,29 @@ export function LiveValuesProvider({ children }: { children: ReactNode }) {
       },
       onChange: (change) => {
         const { tagId, ...value } = change;
+        // Buffer while paused, same as before.
         if (pausedRef.current) {
           pendingRef.current[tagId] = value;
           return;
         }
-        const trend = trendOf(valuesRef.current[tagId], value);
+        // Trend against the newest value seen (batch included), not the last
+        // committed one, so bursts of changes still produce correct arrows.
+        const trend = trendOf(pendingRef.current[tagId] ?? valuesRef.current[tagId], value);
         if (trend) setTrends((t) => ({ ...t, [tagId]: trend }));
-        valuesRef.current = { ...valuesRef.current, [tagId]: value };
-        setValues(valuesRef.current);
+        pendingRef.current[tagId] = value;
+        // Coalesce bursts: one React state update per flush window, not one
+        // per WS message. The value map is a ref, so live cells read the
+        // latest data regardless; only the re-render cadence is throttled.
+        if (flushTimer === undefined) {
+          flushTimer = window.setTimeout(commitPending, CHANGE_FLUSH_MS);
+        }
       },
       onStateChange: setConnected,
     });
-    return unsubscribe;
+    return () => {
+      if (flushTimer !== undefined) window.clearTimeout(flushTimer);
+      unsubscribe();
+    };
   }, []);
 
   const value = useMemo(
