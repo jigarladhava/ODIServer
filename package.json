@@ -1,6 +1,6 @@
 {
   "name": "odiserver",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ODIServer - Open Data & Interface Server. Open-source, cross-platform industrial connectivity server.",
   "license": "Apache-2.0",
   "private": true,

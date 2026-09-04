@@ -1,6 +1,6 @@
 {
   "name": "odiserver-nodered-nodes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "ODIServer bridge nodes for the embedded Node-RED runtime.",
   "license": "Apache-2.0",

@@ -395,7 +395,7 @@ export default function App() {
       >
         <div className="text-[12px] text-fg">
           <p className="text-[14px] font-semibold">ODIServer</p>
-          <p className="mt-0.5 text-muted">Open Data &amp; Interface Server — v0.1.0</p>
+          <p className="mt-0.5 text-muted">Open Data &amp; Interface Server — v0.2.0</p>
           <p className="mt-3">
             Open-source, cross-platform industrial connectivity server with device drivers,
             a live tag engine, and northbound OPC UA and MQTT interfaces.

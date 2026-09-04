@@ -174,7 +174,7 @@ export async function startOpcUaServer(options: OpcUaServerOptions): Promise<Opc
       productName: serverName,
       productUri: "ODIServer",
       manufacturerName: "ODIServer",
-      softwareVersion: "0.1.0",
+      softwareVersion: "0.2.0",
       buildNumber: "1",
       buildDate: new Date(2024, 0, 1),
     },
