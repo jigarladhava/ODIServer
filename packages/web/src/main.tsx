@@ -9,7 +9,7 @@ import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter useTransitions={false}>
       <ThemeProvider>
         <ProjectProvider>
           <LiveValuesProvider>

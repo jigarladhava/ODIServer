@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import type { ColumnDef } from '@tanstack/react-table';
 import { formatTimestamp, formatValue } from '../lib/format';
@@ -331,14 +331,19 @@ export function ConnectivityPage() {
     ];
   }, [project, inspectorTarget, rootEntries]);
 
-  const onTreeSelect = (node: TreeNode) => {
-    setSearchParams(node.id === 'connectivity' ? {} : { node: node.id });
-  };
+  const onTreeSelect = useCallback(
+    (node: TreeNode) => {
+      setSearchParams(node.id === 'connectivity' ? {} : { node: node.id });
+    },
+    [setSearchParams],
+  );
 
   const onRowSelect = (id: string) => {
-    const next = new URLSearchParams(searchParams);
-    next.set('row', id);
-    setSearchParams(next);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('row', id);
+      return next;
+    });
   };
 
   const itemsTabLabel =

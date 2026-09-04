@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChannelIcon,
   ConnectivityIcon,
@@ -54,22 +54,77 @@ function collectIds(nodes: TreeNode[], into: Set<string>): Set<string> {
   return into;
 }
 
+/** Ids of the selected node and all its ancestors — the only rows a selection change can affect. */
+function findSelectedPath(nodes: TreeNode[], selectedId: string | null): Set<string> {
+  const path = new Set<string>();
+  if (!selectedId) return path;
+  const walk = (list: TreeNode[], trail: string[]): boolean => {
+    for (const node of list) {
+      if (node.id === selectedId) {
+        for (const id of trail) path.add(id);
+        path.add(node.id);
+        return true;
+      }
+      if (node.children && walk(node.children, [...trail, node.id])) {
+        path.add(node.id);
+        return true;
+      }
+    }
+    return false;
+  };
+  walk(nodes, []);
+  return path;
+}
+
 interface RowProps {
   node: TreeNode;
   depth: number;
   expandedIds: Set<string>;
   onToggle: (id: string) => void;
+  selected: boolean;
   selectedId: string | null;
+  /** Ids on the selected node's ancestor path (incl. itself) — rows off the path skip re-renders. */
+  selectedPath: Set<string>;
   onSelect: (node: TreeNode) => void;
   filter: string;
 }
 
-function TreeRow({ node, depth, expandedIds, onToggle, selectedId, onSelect, filter }: RowProps) {
+function rowPropsEqual(prev: RowProps, next: RowProps): boolean {
+  if (
+    prev.node !== next.node ||
+    prev.depth !== next.depth ||
+    prev.expandedIds !== next.expandedIds ||
+    prev.onToggle !== next.onToggle ||
+    prev.onSelect !== next.onSelect ||
+    prev.selected !== next.selected ||
+    prev.filter !== next.filter
+  ) {
+    return false;
+  }
+  // Rows on the selected path re-render when the path changes (children's
+  // selection state may change deeper down); rows off the path are unaffected.
+  const prevOnPath = prev.selectedPath.has(prev.node.id);
+  const nextOnPath = next.selectedPath.has(next.node.id);
+  if (prevOnPath !== nextOnPath) return false;
+  if (!prevOnPath && !nextOnPath) return true;
+  return prev.selectedPath === next.selectedPath;
+}
+
+const TreeRow = memo(function TreeRow({
+  node,
+  depth,
+  expandedIds,
+  onToggle,
+  selected,
+  selectedId,
+  selectedPath,
+  onSelect,
+  filter,
+}: RowProps) {
   if (filter && !nodeMatches(node, filter)) return null;
   const children = node.children ?? [];
   const hasChildren = children.length > 0;
   const expanded = filter ? true : expandedIds.has(node.id);
-  const selected = selectedId === node.id;
 
   return (
     <div role="treeitem" aria-expanded={hasChildren ? expanded : undefined} aria-selected={selected}>
@@ -117,32 +172,44 @@ function TreeRow({ node, depth, expandedIds, onToggle, selectedId, onSelect, fil
             depth={depth + 1}
             expandedIds={expandedIds}
             onToggle={onToggle}
+            selected={selectedId === child.id}
             selectedId={selectedId}
+            selectedPath={selectedPath}
             onSelect={onSelect}
             filter={filter}
           />
         ))}
     </div>
   );
-}
+}, rowPropsEqual);
 
 export function Tree({ nodes, selectedId, onSelect, filter = '' }: TreeProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const normalizedFilter = filter.trim().toLowerCase();
+  const selectedPath = useMemo(() => findSelectedPath(nodes, selectedId), [nodes, selectedId]);
+
+  // react-router's setSearchParams changes identity per navigation, which would
+  // defeat the TreeRow memo via the onSelect prop — dispatch through a ref so
+  // rows always call the latest handler with a stable prop identity.
+  const onSelectRef = useRef(onSelect);
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  });
+  const onSelectStable = useCallback((node: TreeNode) => onSelectRef.current(node), []);
 
   // Auto-expand everything once data arrives so the tree starts open.
   useEffect(() => {
     setExpandedIds(collectIds(nodes, new Set()));
   }, [nodes]);
 
-  const onToggle = (id: string) => {
+  const onToggle = useCallback((id: string) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
+  }, []);
 
   return (
     <div role="tree" aria-label="Connectivity tree" className="py-1">
@@ -153,8 +220,10 @@ export function Tree({ nodes, selectedId, onSelect, filter = '' }: TreeProps) {
           depth={0}
           expandedIds={expandedIds}
           onToggle={onToggle}
+          selected={selectedId === node.id}
           selectedId={selectedId}
-          onSelect={onSelect}
+          selectedPath={selectedPath}
+          onSelect={onSelectStable}
           filter={normalizedFilter}
         />
       ))}
